@@ -1304,12 +1304,17 @@ class VideoVAE_(nn.Module):
         H_pixel = H_latent * 8
         W_pixel = W_latent * 8
 
+        # First decode a small tile to get the temporal dimension
+        test_tile = z[:, :, :, :1, :1]  # 1x1 spatial tile
+        test_decoded = self.decode(test_tile, scale)
+        T_pixel = test_decoded.shape[2]
+
         # Decode in tiles
         output = torch.zeros(
-            (B, 3, T, H_pixel, W_pixel), dtype=z.dtype, device=z.device
+            (B, 3, T_pixel, H_pixel, W_pixel), dtype=z.dtype, device=z.device
         )
         weight_map = torch.zeros(
-            (B, 1, T, H_pixel, W_pixel), dtype=z.dtype, device=z.device
+            (B, 1, T_pixel, H_pixel, W_pixel), dtype=z.dtype, device=z.device
         )
 
         for h_start in range(0, H_latent, stride_h_latent):
