@@ -349,6 +349,11 @@ class AttentionBlock(nn.Module):
     def forward(self, x):
         identity = x
         b, c, t, h, w = x.size()
+        
+        # Skip attention for very small spatial dimensions (can cause alignment issues)
+        if h * w < 16:
+            return identity
+            
         x = rearrange(x, "b c t h w -> (b t) c h w")
         x = self.norm(x)
         # compute query, key, value
@@ -1303,9 +1308,12 @@ class VideoVAE_(nn.Module):
         # Output size in pixel space
         H_pixel = H_latent * 8
         W_pixel = W_latent * 8
-
+        
         # First decode a small tile to get the temporal dimension
-        test_tile = z[:, :, :, :1, :1]  # 1x1 spatial tile
+        # Use minimum 4x4 tile to ensure proper memory alignment for attention
+        test_h = min(4, H_latent)
+        test_w = min(4, W_latent)
+        test_tile = z[:, :, :, :test_h, :test_w]
         test_decoded = self.decode(test_tile, scale)
         T_pixel = test_decoded.shape[2]
 
