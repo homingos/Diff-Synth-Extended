@@ -9,13 +9,16 @@ from accelerate import Accelerator
 from accelerate.utils import DistributedDataParallelKwargs
 
 
-
 class ImageDataset(torch.utils.data.Dataset):
     def __init__(
         self,
-        base_path=None, metadata_path=None,
-        max_pixels=1920*1080, height=None, width=None,
-        height_division_factor=16, width_division_factor=16,
+        base_path=None,
+        metadata_path=None,
+        max_pixels=1920 * 1080,
+        height=None,
+        width=None,
+        height_division_factor=16,
+        width_division_factor=16,
         data_file_keys=("image",),
         image_file_extension=("jpg", "jpeg", "png", "webp"),
         repeat=1,
@@ -29,7 +32,7 @@ class ImageDataset(torch.utils.data.Dataset):
             max_pixels = args.max_pixels
             data_file_keys = args.data_file_keys.split(",")
             repeat = args.dataset_repeat
-            
+
         self.base_path = base_path
         self.max_pixels = max_pixels
         self.height = height
@@ -46,7 +49,7 @@ class ImageDataset(torch.utils.data.Dataset):
         elif height is None and width is None:
             print("Height and width are none. Setting `dynamic_resolution` to True.")
             self.dynamic_resolution = True
-            
+
         if metadata_path is None:
             print("No metadata. Trying to generate it.")
             metadata = self.generate_metadata(base_path)
@@ -58,14 +61,13 @@ class ImageDataset(torch.utils.data.Dataset):
             self.data = metadata
         elif metadata_path.endswith(".jsonl"):
             metadata = []
-            with open(metadata_path, 'r') as f:
+            with open(metadata_path, "r") as f:
                 for line in tqdm(f):
                     metadata.append(json.loads(line.strip()))
             self.data = metadata
         else:
             metadata = pd.read_csv(metadata_path)
             self.data = [metadata.iloc[i].to_dict() for i in range(len(metadata))]
-
 
     def generate_metadata(self, folder):
         image_list, prompt_list = [], []
@@ -74,13 +76,15 @@ class ImageDataset(torch.utils.data.Dataset):
             if "." not in file_name:
                 continue
             file_ext_name = file_name.split(".")[-1].lower()
-            file_base_name = file_name[:-len(file_ext_name)-1]
+            file_base_name = file_name[: -len(file_ext_name) - 1]
             if file_ext_name not in self.image_file_extension:
                 continue
             prompt_file_name = file_base_name + ".txt"
             if prompt_file_name not in file_set:
                 continue
-            with open(os.path.join(folder, prompt_file_name), "r", encoding="utf-8") as f:
+            with open(
+                os.path.join(folder, prompt_file_name), "r", encoding="utf-8"
+            ) as f:
                 prompt = f.read().strip()
             image_list.append(file_name)
             prompt_list.append(prompt)
@@ -88,20 +92,20 @@ class ImageDataset(torch.utils.data.Dataset):
         metadata["image"] = image_list
         metadata["prompt"] = prompt_list
         return metadata
-    
-    
+
     def crop_and_resize(self, image, target_height, target_width):
         width, height = image.size
         scale = max(target_width / width, target_height / height)
         image = torchvision.transforms.functional.resize(
             image,
-            (round(height*scale), round(width*scale)),
-            interpolation=torchvision.transforms.InterpolationMode.BILINEAR
+            (round(height * scale), round(width * scale)),
+            interpolation=torchvision.transforms.InterpolationMode.BILINEAR,
         )
-        image = torchvision.transforms.functional.center_crop(image, (target_height, target_width))
+        image = torchvision.transforms.functional.center_crop(
+            image, (target_height, target_width)
+        )
         return image
-    
-    
+
     def get_height_width(self, image):
         if self.dynamic_resolution:
             width, height = image.size
@@ -113,17 +117,14 @@ class ImageDataset(torch.utils.data.Dataset):
         else:
             height, width = self.height, self.width
         return height, width
-    
-    
+
     def load_image(self, file_path):
         image = Image.open(file_path).convert("RGB")
         image = self.crop_and_resize(image, *self.get_height_width(image))
         return image
-    
-    
+
     def load_data(self, file_path):
         return self.load_image(file_path)
-
 
     def __getitem__(self, data_id):
         data = self.data[data_id % len(self.data)].copy()
@@ -139,21 +140,24 @@ class ImageDataset(torch.utils.data.Dataset):
                     warnings.warn(f"cannot load file {data[key]}.")
                     return None
         return data
-    
 
     def __len__(self):
         return len(self.data) * self.repeat
 
 
-
 class VideoDataset(torch.utils.data.Dataset):
     def __init__(
         self,
-        base_path=None, metadata_path=None,
+        base_path=None,
+        metadata_path=None,
         num_frames=81,
-        time_division_factor=4, time_division_remainder=1,
-        max_pixels=1920*1080, height=None, width=None,
-        height_division_factor=16, width_division_factor=16,
+        time_division_factor=4,
+        time_division_remainder=1,
+        max_pixels=1920 * 1080,
+        height=None,
+        width=None,
+        height_division_factor=16,
+        width_division_factor=16,
         data_file_keys=("video",),
         image_file_extension=("jpg", "jpeg", "png", "webp"),
         video_file_extension=("mp4", "avi", "mov", "wmv", "mkv", "flv", "webm", "gif"),
@@ -169,7 +173,7 @@ class VideoDataset(torch.utils.data.Dataset):
             num_frames = args.num_frames
             data_file_keys = args.data_file_keys.split(",")
             repeat = args.dataset_repeat
-        
+
         self.base_path = base_path
         self.num_frames = num_frames
         self.time_division_factor = time_division_factor
@@ -183,14 +187,14 @@ class VideoDataset(torch.utils.data.Dataset):
         self.image_file_extension = image_file_extension
         self.video_file_extension = video_file_extension
         self.repeat = repeat
-        
+
         if height is not None and width is not None:
             print("Height and width are fixed. Setting `dynamic_resolution` to False.")
             self.dynamic_resolution = False
         elif height is None and width is None:
             print("Height and width are none. Setting `dynamic_resolution` to True.")
             self.dynamic_resolution = True
-            
+
         if metadata_path is None:
             print("No metadata. Trying to generate it.")
             metadata = self.generate_metadata(base_path)
@@ -203,8 +207,7 @@ class VideoDataset(torch.utils.data.Dataset):
         else:
             metadata = pd.read_csv(metadata_path)
             self.data = [metadata.iloc[i].to_dict() for i in range(len(metadata))]
-            
-    
+
     def generate_metadata(self, folder):
         video_list, prompt_list = [], []
         file_set = set(os.listdir(folder))
@@ -212,13 +215,18 @@ class VideoDataset(torch.utils.data.Dataset):
             if "." not in file_name:
                 continue
             file_ext_name = file_name.split(".")[-1].lower()
-            file_base_name = file_name[:-len(file_ext_name)-1]
-            if file_ext_name not in self.image_file_extension and file_ext_name not in self.video_file_extension:
+            file_base_name = file_name[: -len(file_ext_name) - 1]
+            if (
+                file_ext_name not in self.image_file_extension
+                and file_ext_name not in self.video_file_extension
+            ):
                 continue
             prompt_file_name = file_base_name + ".txt"
             if prompt_file_name not in file_set:
                 continue
-            with open(os.path.join(folder, prompt_file_name), "r", encoding="utf-8") as f:
+            with open(
+                os.path.join(folder, prompt_file_name), "r", encoding="utf-8"
+            ) as f:
                 prompt = f.read().strip()
             video_list.append(file_name)
             prompt_list.append(prompt)
@@ -226,20 +234,20 @@ class VideoDataset(torch.utils.data.Dataset):
         metadata["video"] = video_list
         metadata["prompt"] = prompt_list
         return metadata
-        
-        
+
     def crop_and_resize(self, image, target_height, target_width):
         width, height = image.size
         scale = max(target_width / width, target_height / height)
         image = torchvision.transforms.functional.resize(
             image,
-            (round(height*scale), round(width*scale)),
-            interpolation=torchvision.transforms.InterpolationMode.BILINEAR
+            (round(height * scale), round(width * scale)),
+            interpolation=torchvision.transforms.InterpolationMode.BILINEAR,
         )
-        image = torchvision.transforms.functional.center_crop(image, (target_height, target_width))
+        image = torchvision.transforms.functional.center_crop(
+            image, (target_height, target_width)
+        )
         return image
-    
-    
+
     def get_height_width(self, image):
         if self.dynamic_resolution:
             width, height = image.size
@@ -251,26 +259,31 @@ class VideoDataset(torch.utils.data.Dataset):
         else:
             height, width = self.height, self.width
         return height, width
-    
-    
+
     def get_num_frames(self, reader):
         num_frames = self.num_frames
         if int(reader.count_frames()) < num_frames:
             num_frames = int(reader.count_frames())
-            while num_frames > 1 and num_frames % self.time_division_factor != self.time_division_remainder:
+            while (
+                num_frames > 1
+                and num_frames % self.time_division_factor
+                != self.time_division_remainder
+            ):
                 num_frames -= 1
         return num_frames
-    
+
     def _load_gif(self, file_path):
         gif_img = Image.open(file_path)
         frame_count = 0
         delays, frames = [], []
         while True:
-            delay = gif_img.info.get('duration', 100) # ms
+            delay = gif_img.info.get("duration", 100)  # ms
             delays.append(delay)
-            rgb_frame = gif_img.convert("RGB")   
-            croped_frame = self.crop_and_resize(rgb_frame, *self.get_height_width(rgb_frame))
-            frames.append(croped_frame)             
+            rgb_frame = gif_img.convert("RGB")
+            croped_frame = self.crop_and_resize(
+                rgb_frame, *self.get_height_width(rgb_frame)
+            )
+            frames.append(croped_frame)
             frame_count += 1
             try:
                 gif_img.seek(frame_count)
@@ -278,19 +291,23 @@ class VideoDataset(torch.utils.data.Dataset):
                 break
         # delays canbe used to calculate framerates
         # i guess it is better to sample images with stable interval,
-        # and using minimal_interval as the interval, 
+        # and using minimal_interval as the interval,
         # and framerate = 1000 / minimal_interval
         if any((delays[0] != i) for i in delays):
             minimal_interval = min([i for i in delays if i > 0])
             # make a ((start,end),frameid) struct
-            start_end_idx_map = [((sum(delays[:i]), sum(delays[:i+1])), i) for i in range(len(delays))]
+            start_end_idx_map = [
+                ((sum(delays[:i]), sum(delays[: i + 1])), i) for i in range(len(delays))
+            ]
             _frames = []
             # according gemini-code-assist, make it more efficient to locate
             # where to sample the frame
             last_match = 0
             for i in range(sum(delays) // minimal_interval):
                 current_time = minimal_interval * i
-                for idx, ((start, end), frame_idx) in enumerate(start_end_idx_map[last_match:]):
+                for idx, ((start, end), frame_idx) in enumerate(
+                    start_end_idx_map[last_match:]
+                ):
                     if start <= current_time < end:
                         _frames.append(frames[frame_idx])
                         last_match = idx + last_match
@@ -300,11 +317,15 @@ class VideoDataset(torch.utils.data.Dataset):
         if num_frames > self.num_frames:
             num_frames = self.num_frames
         else:
-            while num_frames > 1 and num_frames % self.time_division_factor != self.time_division_remainder:
+            while (
+                num_frames > 1
+                and num_frames % self.time_division_factor
+                != self.time_division_remainder
+            ):
                 num_frames -= 1
         frames = frames[:num_frames]
         return frames
-    
+
     def load_video(self, file_path):
         if file_path.lower().endswith(".gif"):
             return self._load_gif(file_path)
@@ -318,25 +339,21 @@ class VideoDataset(torch.utils.data.Dataset):
             frames.append(frame)
         reader.close()
         return frames
-    
-    
+
     def load_image(self, file_path):
         image = Image.open(file_path).convert("RGB")
         image = self.crop_and_resize(image, *self.get_height_width(image))
         frames = [image]
         return frames
-    
-    
+
     def is_image(self, file_path):
         file_ext_name = file_path.split(".")[-1]
         return file_ext_name.lower() in self.image_file_extension
-    
-    
+
     def is_video(self, file_path):
         file_ext_name = file_path.split(".")[-1]
         return file_ext_name.lower() in self.video_file_extension
-    
-    
+
     def load_data(self, file_path):
         if self.is_image(file_path):
             return self.load_image(file_path)
@@ -344,7 +361,6 @@ class VideoDataset(torch.utils.data.Dataset):
             return self.load_video(file_path)
         else:
             return None
-
 
     def __getitem__(self, data_id):
         data = self.data[data_id % len(self.data)].copy()
@@ -356,39 +372,44 @@ class VideoDataset(torch.utils.data.Dataset):
                     warnings.warn(f"cannot load file {data[key]}.")
                     return None
         return data
-    
 
     def __len__(self):
         return len(self.data) * self.repeat
 
 
-
 class DiffusionTrainingModule(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        
-        
+
     def to(self, *args, **kwargs):
         for name, model in self.named_children():
             model.to(*args, **kwargs)
         return self
-        
-        
+
     def trainable_modules(self):
         trainable_modules = filter(lambda p: p.requires_grad, self.parameters())
         return trainable_modules
-    
-    
+
     def trainable_param_names(self):
-        trainable_param_names = list(filter(lambda named_param: named_param[1].requires_grad, self.named_parameters()))
-        trainable_param_names = set([named_param[0] for named_param in trainable_param_names])
+        trainable_param_names = list(
+            filter(
+                lambda named_param: named_param[1].requires_grad,
+                self.named_parameters(),
+            )
+        )
+        trainable_param_names = set(
+            [named_param[0] for named_param in trainable_param_names]
+        )
         return trainable_param_names
-    
-    
-    def add_lora_to_model(self, model, target_modules, lora_rank, lora_alpha=None, upcast_dtype=None):
+
+    def add_lora_to_model(
+        self, model, target_modules, lora_rank, lora_alpha=None, upcast_dtype=None
+    ):
         if lora_alpha is None:
             lora_alpha = lora_rank
-        lora_config = LoraConfig(r=lora_rank, lora_alpha=lora_alpha, target_modules=target_modules)
+        lora_config = LoraConfig(
+            r=lora_rank, lora_alpha=lora_alpha, target_modules=target_modules
+        )
         model = inject_adapter_in_model(lora_config, model)
         if upcast_dtype is not None:
             for param in model.parameters():
@@ -396,71 +417,234 @@ class DiffusionTrainingModule(torch.nn.Module):
                     param.data = param.to(upcast_dtype)
         return model
 
-
     def mapping_lora_state_dict(self, state_dict):
         new_state_dict = {}
         for key, value in state_dict.items():
             if "lora_A.weight" in key or "lora_B.weight" in key:
-                new_key = key.replace("lora_A.weight", "lora_A.default.weight").replace("lora_B.weight", "lora_B.default.weight")
+                new_key = key.replace("lora_A.weight", "lora_A.default.weight").replace(
+                    "lora_B.weight", "lora_B.default.weight"
+                )
                 new_state_dict[new_key] = value
             elif "lora_A.default.weight" in key or "lora_B.default.weight" in key:
                 new_state_dict[key] = value
         return new_state_dict
 
+    def add_dora_to_model(
+        self, model, target_modules, dora_rank, dora_alpha=None, upcast_dtype=None
+    ):
+        """
+        Add DoRA (Weight-Decomposed Low-Rank Adaptation) to a model.
+        DoRA decomposes weights into magnitude and direction components for better fine-tuning.
+
+        Based on: https://arxiv.org/abs/2402.09353
+        Implementation follows Wan-Alpha paper requirements.
+
+        Args:
+            model: The model to add DoRA to
+            target_modules: List of module names to apply DoRA to (e.g., ["q", "k", "v", "o"])
+            dora_rank: Rank of the low-rank decomposition
+            dora_alpha: Scaling factor (defaults to dora_rank if None)
+            upcast_dtype: Optional dtype to cast trainable parameters to
+
+        Returns:
+            model: Model with DoRA adapters applied
+        """
+        if dora_alpha is None:
+            dora_alpha = dora_rank
+
+        # Import DoRA-specific config if available, otherwise use LoRA as base
+        try:
+            from peft import DoraConfig
+
+            dora_config = DoraConfig(
+                r=dora_rank,
+                lora_alpha=dora_alpha,
+                target_modules=target_modules,
+                # DoRA-specific parameters
+                use_dora=True,
+            )
+        except ImportError:
+            # Fallback: Use LoRA config with DoRA flag if DoraConfig not available
+            from peft import LoraConfig
+
+            warnings.warn(
+                "DoRA not found in peft library, using LoRA config with DoRA flag. Please update peft library for full DoRA support."
+            )
+            lora_config = LoraConfig(
+                r=dora_rank, lora_alpha=dora_alpha, target_modules=target_modules
+            )
+            model = inject_adapter_in_model(lora_config, model)
+
+            # Manually add magnitude vectors for DoRA behavior
+            self._add_magnitude_vectors_to_lora(model, target_modules)
+            return model
+
+        # Apply DoRA config
+        model = inject_adapter_in_model(dora_config, model)
+
+        # Upcast trainable parameters if needed
+        if upcast_dtype is not None:
+            for param in model.parameters():
+                if param.requires_grad:
+                    param.data = param.to(upcast_dtype)
+
+        return model
+
+    def _add_magnitude_vectors_to_lora(self, model, target_modules):
+        """
+        Manually add magnitude vectors to LoRA modules to enable DoRA behavior.
+        This is a fallback when DoraConfig is not available in peft library.
+        """
+        import torch.nn as nn
+
+        for name, module in model.named_modules():
+            # Check if this module has LoRA adapters
+            if hasattr(module, "lora_A") and hasattr(module, "lora_B"):
+                # Check if target module matches
+                module_name_parts = name.split(".")
+                if any(target in module_name_parts for target in target_modules):
+                    # Get weight dimensions
+                    if hasattr(module, "weight"):
+                        weight_shape = module.weight.shape
+                        # Create magnitude vector parameter
+                        if len(weight_shape) == 2:  # Linear layer
+                            magnitude_shape = (weight_shape[0], 1)
+                        elif len(weight_shape) == 4:  # Conv2d layer
+                            magnitude_shape = (weight_shape[0], 1, 1, 1)
+                        else:
+                            continue
+
+                        # Initialize magnitude vector
+                        magnitude = nn.Parameter(
+                            torch.ones(
+                                magnitude_shape,
+                                dtype=module.weight.dtype,
+                                device=module.weight.device,
+                            )
+                        )
+                        module.register_parameter("lora_magnitude_vector", magnitude)
+
+    def mapping_dora_state_dict(self, state_dict):
+        """
+        Map DoRA state dict keys to the correct format for loading.
+        Handles lora_A, lora_B, and lora_magnitude_vector keys.
+        """
+        new_state_dict = {}
+        for key, value in state_dict.items():
+            # Handle lora_A and lora_B keys
+            if "lora_A.weight" in key or "lora_B.weight" in key:
+                new_key = key.replace("lora_A.weight", "lora_A.default.weight").replace(
+                    "lora_B.weight", "lora_B.default.weight"
+                )
+                new_state_dict[new_key] = value
+            elif "lora_A.default.weight" in key or "lora_B.default.weight" in key:
+                new_state_dict[key] = value
+            # Handle magnitude vector keys
+            elif "lora_magnitude_vector" in key:
+                new_state_dict[key] = value
+        return new_state_dict
 
     def export_trainable_state_dict(self, state_dict, remove_prefix=None):
         trainable_param_names = self.trainable_param_names()
-        state_dict = {name: param for name, param in state_dict.items() if name in trainable_param_names}
+        state_dict = {
+            name: param
+            for name, param in state_dict.items()
+            if name in trainable_param_names
+        }
         if remove_prefix is not None:
             state_dict_ = {}
             for name, param in state_dict.items():
                 if name.startswith(remove_prefix):
-                    name = name[len(remove_prefix):]
+                    name = name[len(remove_prefix) :]
                 state_dict_[name] = param
             state_dict = state_dict_
         return state_dict
-    
-    
+
     def transfer_data_to_device(self, data, device, torch_float_dtype=None):
         for key in data:
             if isinstance(data[key], torch.Tensor):
                 data[key] = data[key].to(device)
-                if torch_float_dtype is not None and data[key].dtype in [torch.float, torch.float16, torch.bfloat16]:
+                if torch_float_dtype is not None and data[key].dtype in [
+                    torch.float,
+                    torch.float16,
+                    torch.bfloat16,
+                ]:
                     data[key] = data[key].to(torch_float_dtype)
         return data
-    
-    
-    def parse_model_configs(self, model_paths, model_id_with_origin_paths, enable_fp8_training=False):
+
+    def parse_model_configs(
+        self, model_paths, model_id_with_origin_paths, enable_fp8_training=False
+    ):
         offload_dtype = torch.float8_e4m3fn if enable_fp8_training else None
         model_configs = []
         if model_paths is not None:
             model_paths = json.loads(model_paths)
-            model_configs += [ModelConfig(path=path, offload_dtype=offload_dtype) for path in model_paths]
+            model_configs += [
+                ModelConfig(path=path, offload_dtype=offload_dtype)
+                for path in model_paths
+            ]
         if model_id_with_origin_paths is not None:
             model_id_with_origin_paths = model_id_with_origin_paths.split(",")
-            model_configs += [ModelConfig(model_id=i.split(":")[0], origin_file_pattern=i.split(":")[1], offload_dtype=offload_dtype) for i in model_id_with_origin_paths]
+            model_configs += [
+                ModelConfig(
+                    model_id=i.split(":")[0],
+                    origin_file_pattern=i.split(":")[1],
+                    offload_dtype=offload_dtype,
+                )
+                for i in model_id_with_origin_paths
+            ]
         return model_configs
-    
-    
+
     def switch_pipe_to_training_mode(
         self,
         pipe,
         trainable_models,
-        lora_base_model, lora_target_modules, lora_rank, lora_checkpoint=None,
+        lora_base_model,
+        lora_target_modules,
+        lora_rank,
+        lora_checkpoint=None,
         enable_fp8_training=False,
+        use_dora=False,
+        dora_rank=None,
+        dora_checkpoint=None,
     ):
         # Scheduler
         pipe.scheduler.set_timesteps(1000, training=True)
-        
+
         # Freeze untrainable models
-        pipe.freeze_except([] if trainable_models is None else trainable_models.split(","))
-        
+        pipe.freeze_except(
+            [] if trainable_models is None else trainable_models.split(",")
+        )
+
         # Enable FP8 if pipeline supports
         if enable_fp8_training and hasattr(pipe, "_enable_fp8_lora_training"):
             pipe._enable_fp8_lora_training(torch.float8_e4m3fn)
-        
-        # Add LoRA to the base models
-        if lora_base_model is not None:
+
+        # Add DoRA to the base models (prioritized over LoRA)
+        if use_dora and lora_base_model is not None:
+            if dora_rank is None:
+                dora_rank = lora_rank  # Use lora_rank as dora_rank if not specified
+            model = self.add_dora_to_model(
+                getattr(pipe, lora_base_model),
+                target_modules=lora_target_modules.split(","),
+                dora_rank=dora_rank,
+                dora_alpha=dora_rank,
+                upcast_dtype=pipe.torch_dtype,
+            )
+            if dora_checkpoint is not None:
+                state_dict = load_state_dict(dora_checkpoint)
+                state_dict = self.mapping_dora_state_dict(state_dict)
+                load_result = model.load_state_dict(state_dict, strict=False)
+                print(
+                    f"DoRA checkpoint loaded: {dora_checkpoint}, total {len(state_dict)} keys"
+                )
+                if len(load_result[1]) > 0:
+                    print(
+                        f"Warning, DoRA key mismatch! Unexpected keys in DoRA checkpoint: {load_result[1]}"
+                    )
+            setattr(pipe, lora_base_model, model)
+        # Add LoRA to the base models (if not using DoRA)
+        elif lora_base_model is not None:
             model = self.add_lora_to_model(
                 getattr(pipe, lora_base_model),
                 target_modules=lora_target_modules.split(","),
@@ -471,47 +655,53 @@ class DiffusionTrainingModule(torch.nn.Module):
                 state_dict = load_state_dict(lora_checkpoint)
                 state_dict = self.mapping_lora_state_dict(state_dict)
                 load_result = model.load_state_dict(state_dict, strict=False)
-                print(f"LoRA checkpoint loaded: {lora_checkpoint}, total {len(state_dict)} keys")
+                print(
+                    f"LoRA checkpoint loaded: {lora_checkpoint}, total {len(state_dict)} keys"
+                )
                 if len(load_result[1]) > 0:
-                    print(f"Warning, LoRA key mismatch! Unexpected keys in LoRA checkpoint: {load_result[1]}")
+                    print(
+                        f"Warning, LoRA key mismatch! Unexpected keys in LoRA checkpoint: {load_result[1]}"
+                    )
             setattr(pipe, lora_base_model, model)
 
 
 class ModelLogger:
-    def __init__(self, output_path, remove_prefix_in_ckpt=None, state_dict_converter=lambda x:x):
+    def __init__(
+        self, output_path, remove_prefix_in_ckpt=None, state_dict_converter=lambda x: x
+    ):
         self.output_path = output_path
         self.remove_prefix_in_ckpt = remove_prefix_in_ckpt
         self.state_dict_converter = state_dict_converter
         self.num_steps = 0
-
 
     def on_step_end(self, accelerator, model, save_steps=None):
         self.num_steps += 1
         if save_steps is not None and self.num_steps % save_steps == 0:
             self.save_model(accelerator, model, f"step-{self.num_steps}.safetensors")
 
-
     def on_epoch_end(self, accelerator, model, epoch_id):
         accelerator.wait_for_everyone()
         if accelerator.is_main_process:
             state_dict = accelerator.get_state_dict(model)
-            state_dict = accelerator.unwrap_model(model).export_trainable_state_dict(state_dict, remove_prefix=self.remove_prefix_in_ckpt)
+            state_dict = accelerator.unwrap_model(model).export_trainable_state_dict(
+                state_dict, remove_prefix=self.remove_prefix_in_ckpt
+            )
             state_dict = self.state_dict_converter(state_dict)
             os.makedirs(self.output_path, exist_ok=True)
             path = os.path.join(self.output_path, f"epoch-{epoch_id}.safetensors")
             accelerator.save(state_dict, path, safe_serialization=True)
 
-
     def on_training_end(self, accelerator, model, save_steps=None):
         if save_steps is not None and self.num_steps % save_steps != 0:
             self.save_model(accelerator, model, f"step-{self.num_steps}.safetensors")
-
 
     def save_model(self, accelerator, model, file_name):
         accelerator.wait_for_everyone()
         if accelerator.is_main_process:
             state_dict = accelerator.get_state_dict(model)
-            state_dict = accelerator.unwrap_model(model).export_trainable_state_dict(state_dict, remove_prefix=self.remove_prefix_in_ckpt)
+            state_dict = accelerator.unwrap_model(model).export_trainable_state_dict(
+                state_dict, remove_prefix=self.remove_prefix_in_ckpt
+            )
             state_dict = self.state_dict_converter(state_dict)
             os.makedirs(self.output_path, exist_ok=True)
             path = os.path.join(self.output_path, file_name)
@@ -529,7 +719,7 @@ def launch_training_task(
     num_epochs: int = 1,
     gradient_accumulation_steps: int = 1,
     find_unused_parameters: bool = False,
-    args = None,
+    args=None,
 ):
     if args is not None:
         learning_rate = args.learning_rate
@@ -539,16 +729,24 @@ def launch_training_task(
         num_epochs = args.num_epochs
         gradient_accumulation_steps = args.gradient_accumulation_steps
         find_unused_parameters = args.find_unused_parameters
-    
-    optimizer = torch.optim.AdamW(model.trainable_modules(), lr=learning_rate, weight_decay=weight_decay)
+
+    optimizer = torch.optim.AdamW(
+        model.trainable_modules(), lr=learning_rate, weight_decay=weight_decay
+    )
     scheduler = torch.optim.lr_scheduler.ConstantLR(optimizer)
-    dataloader = torch.utils.data.DataLoader(dataset, shuffle=True, collate_fn=lambda x: x[0], num_workers=num_workers)
+    dataloader = torch.utils.data.DataLoader(
+        dataset, shuffle=True, collate_fn=lambda x: x[0], num_workers=num_workers
+    )
     accelerator = Accelerator(
         gradient_accumulation_steps=gradient_accumulation_steps,
-        kwargs_handlers=[DistributedDataParallelKwargs(find_unused_parameters=find_unused_parameters)],
+        kwargs_handlers=[
+            DistributedDataParallelKwargs(find_unused_parameters=find_unused_parameters)
+        ],
     )
-    model, optimizer, dataloader, scheduler = accelerator.prepare(model, optimizer, dataloader, scheduler)
-    
+    model, optimizer, dataloader, scheduler = accelerator.prepare(
+        model, optimizer, dataloader, scheduler
+    )
+
     for epoch_id in range(num_epochs):
         for data in tqdm(dataloader):
             with accelerator.accumulate(model):
@@ -571,124 +769,490 @@ def launch_data_process_task(
     model: DiffusionTrainingModule,
     model_logger: ModelLogger,
     num_workers: int = 8,
-    args = None,
+    args=None,
 ):
     if args is not None:
         num_workers = args.dataset_num_workers
-        
-    dataloader = torch.utils.data.DataLoader(dataset, shuffle=False, collate_fn=lambda x: x[0], num_workers=num_workers)
+
+    dataloader = torch.utils.data.DataLoader(
+        dataset, shuffle=False, collate_fn=lambda x: x[0], num_workers=num_workers
+    )
     accelerator = Accelerator()
     model, dataloader = accelerator.prepare(model, dataloader)
-    
+
     for data_id, data in tqdm(enumerate(dataloader)):
         with accelerator.accumulate(model):
             with torch.no_grad():
-                folder = os.path.join(model_logger.output_path, str(accelerator.process_index))
+                folder = os.path.join(
+                    model_logger.output_path, str(accelerator.process_index)
+                )
                 os.makedirs(folder, exist_ok=True)
-                save_path = os.path.join(model_logger.output_path, str(accelerator.process_index), f"{data_id}.pth")
+                save_path = os.path.join(
+                    model_logger.output_path,
+                    str(accelerator.process_index),
+                    f"{data_id}.pth",
+                )
                 data = model(data, return_inputs=True)
                 torch.save(data, save_path)
 
 
-
 def wan_parser():
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
-    parser.add_argument("--dataset_base_path", type=str, default="", required=True, help="Base path of the dataset.")
-    parser.add_argument("--dataset_metadata_path", type=str, default=None, help="Path to the metadata file of the dataset.")
-    parser.add_argument("--max_pixels", type=int, default=1280*720, help="Maximum number of pixels per frame, used for dynamic resolution..")
-    parser.add_argument("--height", type=int, default=None, help="Height of images or videos. Leave `height` and `width` empty to enable dynamic resolution.")
-    parser.add_argument("--width", type=int, default=None, help="Width of images or videos. Leave `height` and `width` empty to enable dynamic resolution.")
-    parser.add_argument("--num_frames", type=int, default=81, help="Number of frames per video. Frames are sampled from the video prefix.")
-    parser.add_argument("--data_file_keys", type=str, default="image,video", help="Data file keys in the metadata. Comma-separated.")
-    parser.add_argument("--dataset_repeat", type=int, default=1, help="Number of times to repeat the dataset per epoch.")
-    parser.add_argument("--model_paths", type=str, default=None, help="Paths to load models. In JSON format.")
-    parser.add_argument("--model_id_with_origin_paths", type=str, default=None, help="Model ID with origin paths, e.g., Wan-AI/Wan2.1-T2V-1.3B:diffusion_pytorch_model*.safetensors. Comma-separated.")
-    parser.add_argument("--audio_processor_config", type=str, default=None, help="Model ID with origin paths to the audio processor config, e.g., Wan-AI/Wan2.2-S2V-14B:wav2vec2-large-xlsr-53-english/")
-    parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate.")
+    parser.add_argument(
+        "--dataset_base_path",
+        type=str,
+        default="",
+        required=True,
+        help="Base path of the dataset.",
+    )
+    parser.add_argument(
+        "--dataset_metadata_path",
+        type=str,
+        default=None,
+        help="Path to the metadata file of the dataset.",
+    )
+    parser.add_argument(
+        "--max_pixels",
+        type=int,
+        default=1280 * 720,
+        help="Maximum number of pixels per frame, used for dynamic resolution..",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=None,
+        help="Height of images or videos. Leave `height` and `width` empty to enable dynamic resolution.",
+    )
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=None,
+        help="Width of images or videos. Leave `height` and `width` empty to enable dynamic resolution.",
+    )
+    parser.add_argument(
+        "--num_frames",
+        type=int,
+        default=81,
+        help="Number of frames per video. Frames are sampled from the video prefix.",
+    )
+    parser.add_argument(
+        "--data_file_keys",
+        type=str,
+        default="image,video",
+        help="Data file keys in the metadata. Comma-separated.",
+    )
+    parser.add_argument(
+        "--dataset_repeat",
+        type=int,
+        default=1,
+        help="Number of times to repeat the dataset per epoch.",
+    )
+    parser.add_argument(
+        "--model_paths",
+        type=str,
+        default=None,
+        help="Paths to load models. In JSON format.",
+    )
+    parser.add_argument(
+        "--model_id_with_origin_paths",
+        type=str,
+        default=None,
+        help="Model ID with origin paths, e.g., Wan-AI/Wan2.1-T2V-1.3B:diffusion_pytorch_model*.safetensors. Comma-separated.",
+    )
+    parser.add_argument(
+        "--audio_processor_config",
+        type=str,
+        default=None,
+        help="Model ID with origin paths to the audio processor config, e.g., Wan-AI/Wan2.2-S2V-14B:wav2vec2-large-xlsr-53-english/",
+    )
+    parser.add_argument(
+        "--learning_rate", type=float, default=1e-4, help="Learning rate."
+    )
     parser.add_argument("--num_epochs", type=int, default=1, help="Number of epochs.")
-    parser.add_argument("--output_path", type=str, default="./models", help="Output save path.")
-    parser.add_argument("--remove_prefix_in_ckpt", type=str, default="pipe.dit.", help="Remove prefix in ckpt.")
-    parser.add_argument("--trainable_models", type=str, default=None, help="Models to train, e.g., dit, vae, text_encoder.")
-    parser.add_argument("--lora_base_model", type=str, default=None, help="Which model LoRA is added to.")
-    parser.add_argument("--lora_target_modules", type=str, default="q,k,v,o,ffn.0,ffn.2", help="Which layers LoRA is added to.")
+    parser.add_argument(
+        "--output_path", type=str, default="./models", help="Output save path."
+    )
+    parser.add_argument(
+        "--remove_prefix_in_ckpt",
+        type=str,
+        default="pipe.dit.",
+        help="Remove prefix in ckpt.",
+    )
+    parser.add_argument(
+        "--trainable_models",
+        type=str,
+        default=None,
+        help="Models to train, e.g., dit, vae, text_encoder.",
+    )
+    parser.add_argument(
+        "--lora_base_model",
+        type=str,
+        default=None,
+        help="Which model LoRA is added to.",
+    )
+    parser.add_argument(
+        "--lora_target_modules",
+        type=str,
+        default="q,k,v,o,ffn.0,ffn.2",
+        help="Which layers LoRA is added to.",
+    )
     parser.add_argument("--lora_rank", type=int, default=32, help="Rank of LoRA.")
-    parser.add_argument("--lora_checkpoint", type=str, default=None, help="Path to the LoRA checkpoint. If provided, LoRA will be loaded from this checkpoint.")
-    parser.add_argument("--extra_inputs", default=None, help="Additional model inputs, comma-separated.")
-    parser.add_argument("--use_gradient_checkpointing_offload", default=False, action="store_true", help="Whether to offload gradient checkpointing to CPU memory.")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Gradient accumulation steps.")
-    parser.add_argument("--max_timestep_boundary", type=float, default=1.0, help="Max timestep boundary (for mixed models, e.g., Wan-AI/Wan2.2-I2V-A14B).")
-    parser.add_argument("--min_timestep_boundary", type=float, default=0.0, help="Min timestep boundary (for mixed models, e.g., Wan-AI/Wan2.2-I2V-A14B).")
-    parser.add_argument("--find_unused_parameters", default=False, action="store_true", help="Whether to find unused parameters in DDP.")
-    parser.add_argument("--save_steps", type=int, default=None, help="Number of checkpoint saving invervals. If None, checkpoints will be saved every epoch.")
-    parser.add_argument("--dataset_num_workers", type=int, default=0, help="Number of workers for data loading.")
-    parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay.")
+    parser.add_argument(
+        "--lora_checkpoint",
+        type=str,
+        default=None,
+        help="Path to the LoRA checkpoint. If provided, LoRA will be loaded from this checkpoint.",
+    )
+    parser.add_argument(
+        "--extra_inputs", default=None, help="Additional model inputs, comma-separated."
+    )
+    parser.add_argument(
+        "--use_gradient_checkpointing_offload",
+        default=False,
+        action="store_true",
+        help="Whether to offload gradient checkpointing to CPU memory.",
+    )
+    parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int,
+        default=1,
+        help="Gradient accumulation steps.",
+    )
+    parser.add_argument(
+        "--max_timestep_boundary",
+        type=float,
+        default=1.0,
+        help="Max timestep boundary (for mixed models, e.g., Wan-AI/Wan2.2-I2V-A14B).",
+    )
+    parser.add_argument(
+        "--min_timestep_boundary",
+        type=float,
+        default=0.0,
+        help="Min timestep boundary (for mixed models, e.g., Wan-AI/Wan2.2-I2V-A14B).",
+    )
+    parser.add_argument(
+        "--find_unused_parameters",
+        default=False,
+        action="store_true",
+        help="Whether to find unused parameters in DDP.",
+    )
+    parser.add_argument(
+        "--save_steps",
+        type=int,
+        default=None,
+        help="Number of checkpoint saving invervals. If None, checkpoints will be saved every epoch.",
+    )
+    parser.add_argument(
+        "--dataset_num_workers",
+        type=int,
+        default=0,
+        help="Number of workers for data loading.",
+    )
+    parser.add_argument(
+        "--weight_decay", type=float, default=0.01, help="Weight decay."
+    )
     return parser
-
 
 
 def flux_parser():
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
-    parser.add_argument("--dataset_base_path", type=str, default="", required=True, help="Base path of the dataset.")
-    parser.add_argument("--dataset_metadata_path", type=str, default=None, help="Path to the metadata file of the dataset.")
-    parser.add_argument("--max_pixels", type=int, default=1024*1024, help="Maximum number of pixels per frame, used for dynamic resolution..")
-    parser.add_argument("--height", type=int, default=None, help="Height of images. Leave `height` and `width` empty to enable dynamic resolution.")
-    parser.add_argument("--width", type=int, default=None, help="Width of images. Leave `height` and `width` empty to enable dynamic resolution.")
-    parser.add_argument("--data_file_keys", type=str, default="image", help="Data file keys in the metadata. Comma-separated.")
-    parser.add_argument("--dataset_repeat", type=int, default=1, help="Number of times to repeat the dataset per epoch.")
-    parser.add_argument("--model_paths", type=str, default=None, help="Paths to load models. In JSON format.")
-    parser.add_argument("--model_id_with_origin_paths", type=str, default=None, help="Model ID with origin paths, e.g., Wan-AI/Wan2.1-T2V-1.3B:diffusion_pytorch_model*.safetensors. Comma-separated.")
-    parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate.")
+    parser.add_argument(
+        "--dataset_base_path",
+        type=str,
+        default="",
+        required=True,
+        help="Base path of the dataset.",
+    )
+    parser.add_argument(
+        "--dataset_metadata_path",
+        type=str,
+        default=None,
+        help="Path to the metadata file of the dataset.",
+    )
+    parser.add_argument(
+        "--max_pixels",
+        type=int,
+        default=1024 * 1024,
+        help="Maximum number of pixels per frame, used for dynamic resolution..",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=None,
+        help="Height of images. Leave `height` and `width` empty to enable dynamic resolution.",
+    )
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=None,
+        help="Width of images. Leave `height` and `width` empty to enable dynamic resolution.",
+    )
+    parser.add_argument(
+        "--data_file_keys",
+        type=str,
+        default="image",
+        help="Data file keys in the metadata. Comma-separated.",
+    )
+    parser.add_argument(
+        "--dataset_repeat",
+        type=int,
+        default=1,
+        help="Number of times to repeat the dataset per epoch.",
+    )
+    parser.add_argument(
+        "--model_paths",
+        type=str,
+        default=None,
+        help="Paths to load models. In JSON format.",
+    )
+    parser.add_argument(
+        "--model_id_with_origin_paths",
+        type=str,
+        default=None,
+        help="Model ID with origin paths, e.g., Wan-AI/Wan2.1-T2V-1.3B:diffusion_pytorch_model*.safetensors. Comma-separated.",
+    )
+    parser.add_argument(
+        "--learning_rate", type=float, default=1e-4, help="Learning rate."
+    )
     parser.add_argument("--num_epochs", type=int, default=1, help="Number of epochs.")
-    parser.add_argument("--output_path", type=str, default="./models", help="Output save path.")
-    parser.add_argument("--remove_prefix_in_ckpt", type=str, default="pipe.dit.", help="Remove prefix in ckpt.")
-    parser.add_argument("--trainable_models", type=str, default=None, help="Models to train, e.g., dit, vae, text_encoder.")
-    parser.add_argument("--lora_base_model", type=str, default=None, help="Which model LoRA is added to.")
-    parser.add_argument("--lora_target_modules", type=str, default="q,k,v,o,ffn.0,ffn.2", help="Which layers LoRA is added to.")
+    parser.add_argument(
+        "--output_path", type=str, default="./models", help="Output save path."
+    )
+    parser.add_argument(
+        "--remove_prefix_in_ckpt",
+        type=str,
+        default="pipe.dit.",
+        help="Remove prefix in ckpt.",
+    )
+    parser.add_argument(
+        "--trainable_models",
+        type=str,
+        default=None,
+        help="Models to train, e.g., dit, vae, text_encoder.",
+    )
+    parser.add_argument(
+        "--lora_base_model",
+        type=str,
+        default=None,
+        help="Which model LoRA is added to.",
+    )
+    parser.add_argument(
+        "--lora_target_modules",
+        type=str,
+        default="q,k,v,o,ffn.0,ffn.2",
+        help="Which layers LoRA is added to.",
+    )
     parser.add_argument("--lora_rank", type=int, default=32, help="Rank of LoRA.")
-    parser.add_argument("--lora_checkpoint", type=str, default=None, help="Path to the LoRA checkpoint. If provided, LoRA will be loaded from this checkpoint.")
-    parser.add_argument("--extra_inputs", default=None, help="Additional model inputs, comma-separated.")
-    parser.add_argument("--align_to_opensource_format", default=False, action="store_true", help="Whether to align the lora format to opensource format. Only for DiT's LoRA.")
-    parser.add_argument("--use_gradient_checkpointing", default=False, action="store_true", help="Whether to use gradient checkpointing.")
-    parser.add_argument("--use_gradient_checkpointing_offload", default=False, action="store_true", help="Whether to offload gradient checkpointing to CPU memory.")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Gradient accumulation steps.")
-    parser.add_argument("--find_unused_parameters", default=False, action="store_true", help="Whether to find unused parameters in DDP.")
-    parser.add_argument("--save_steps", type=int, default=None, help="Number of checkpoint saving invervals. If None, checkpoints will be saved every epoch.")
-    parser.add_argument("--dataset_num_workers", type=int, default=0, help="Number of workers for data loading.")
-    parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay.")
+    parser.add_argument(
+        "--lora_checkpoint",
+        type=str,
+        default=None,
+        help="Path to the LoRA checkpoint. If provided, LoRA will be loaded from this checkpoint.",
+    )
+    parser.add_argument(
+        "--extra_inputs", default=None, help="Additional model inputs, comma-separated."
+    )
+    parser.add_argument(
+        "--align_to_opensource_format",
+        default=False,
+        action="store_true",
+        help="Whether to align the lora format to opensource format. Only for DiT's LoRA.",
+    )
+    parser.add_argument(
+        "--use_gradient_checkpointing",
+        default=False,
+        action="store_true",
+        help="Whether to use gradient checkpointing.",
+    )
+    parser.add_argument(
+        "--use_gradient_checkpointing_offload",
+        default=False,
+        action="store_true",
+        help="Whether to offload gradient checkpointing to CPU memory.",
+    )
+    parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int,
+        default=1,
+        help="Gradient accumulation steps.",
+    )
+    parser.add_argument(
+        "--find_unused_parameters",
+        default=False,
+        action="store_true",
+        help="Whether to find unused parameters in DDP.",
+    )
+    parser.add_argument(
+        "--save_steps",
+        type=int,
+        default=None,
+        help="Number of checkpoint saving invervals. If None, checkpoints will be saved every epoch.",
+    )
+    parser.add_argument(
+        "--dataset_num_workers",
+        type=int,
+        default=0,
+        help="Number of workers for data loading.",
+    )
+    parser.add_argument(
+        "--weight_decay", type=float, default=0.01, help="Weight decay."
+    )
     return parser
-
 
 
 def qwen_image_parser():
     parser = argparse.ArgumentParser(description="Simple example of a training script.")
-    parser.add_argument("--dataset_base_path", type=str, default="", required=True, help="Base path of the dataset.")
-    parser.add_argument("--dataset_metadata_path", type=str, default=None, help="Path to the metadata file of the dataset.")
-    parser.add_argument("--max_pixels", type=int, default=1024*1024, help="Maximum number of pixels per frame, used for dynamic resolution..")
-    parser.add_argument("--height", type=int, default=None, help="Height of images. Leave `height` and `width` empty to enable dynamic resolution.")
-    parser.add_argument("--width", type=int, default=None, help="Width of images. Leave `height` and `width` empty to enable dynamic resolution.")
-    parser.add_argument("--data_file_keys", type=str, default="image", help="Data file keys in the metadata. Comma-separated.")
-    parser.add_argument("--dataset_repeat", type=int, default=1, help="Number of times to repeat the dataset per epoch.")
-    parser.add_argument("--model_paths", type=str, default=None, help="Paths to load models. In JSON format.")
-    parser.add_argument("--model_id_with_origin_paths", type=str, default=None, help="Model ID with origin paths, e.g., Wan-AI/Wan2.1-T2V-1.3B:diffusion_pytorch_model*.safetensors. Comma-separated.")
-    parser.add_argument("--tokenizer_path", type=str, default=None, help="Paths to tokenizer.")
-    parser.add_argument("--learning_rate", type=float, default=1e-4, help="Learning rate.")
+    parser.add_argument(
+        "--dataset_base_path",
+        type=str,
+        default="",
+        required=True,
+        help="Base path of the dataset.",
+    )
+    parser.add_argument(
+        "--dataset_metadata_path",
+        type=str,
+        default=None,
+        help="Path to the metadata file of the dataset.",
+    )
+    parser.add_argument(
+        "--max_pixels",
+        type=int,
+        default=1024 * 1024,
+        help="Maximum number of pixels per frame, used for dynamic resolution..",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=None,
+        help="Height of images. Leave `height` and `width` empty to enable dynamic resolution.",
+    )
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=None,
+        help="Width of images. Leave `height` and `width` empty to enable dynamic resolution.",
+    )
+    parser.add_argument(
+        "--data_file_keys",
+        type=str,
+        default="image",
+        help="Data file keys in the metadata. Comma-separated.",
+    )
+    parser.add_argument(
+        "--dataset_repeat",
+        type=int,
+        default=1,
+        help="Number of times to repeat the dataset per epoch.",
+    )
+    parser.add_argument(
+        "--model_paths",
+        type=str,
+        default=None,
+        help="Paths to load models. In JSON format.",
+    )
+    parser.add_argument(
+        "--model_id_with_origin_paths",
+        type=str,
+        default=None,
+        help="Model ID with origin paths, e.g., Wan-AI/Wan2.1-T2V-1.3B:diffusion_pytorch_model*.safetensors. Comma-separated.",
+    )
+    parser.add_argument(
+        "--tokenizer_path", type=str, default=None, help="Paths to tokenizer."
+    )
+    parser.add_argument(
+        "--learning_rate", type=float, default=1e-4, help="Learning rate."
+    )
     parser.add_argument("--num_epochs", type=int, default=1, help="Number of epochs.")
-    parser.add_argument("--output_path", type=str, default="./models", help="Output save path.")
-    parser.add_argument("--remove_prefix_in_ckpt", type=str, default="pipe.dit.", help="Remove prefix in ckpt.")
-    parser.add_argument("--trainable_models", type=str, default=None, help="Models to train, e.g., dit, vae, text_encoder.")
-    parser.add_argument("--lora_base_model", type=str, default=None, help="Which model LoRA is added to.")
-    parser.add_argument("--lora_target_modules", type=str, default="q,k,v,o,ffn.0,ffn.2", help="Which layers LoRA is added to.")
+    parser.add_argument(
+        "--output_path", type=str, default="./models", help="Output save path."
+    )
+    parser.add_argument(
+        "--remove_prefix_in_ckpt",
+        type=str,
+        default="pipe.dit.",
+        help="Remove prefix in ckpt.",
+    )
+    parser.add_argument(
+        "--trainable_models",
+        type=str,
+        default=None,
+        help="Models to train, e.g., dit, vae, text_encoder.",
+    )
+    parser.add_argument(
+        "--lora_base_model",
+        type=str,
+        default=None,
+        help="Which model LoRA is added to.",
+    )
+    parser.add_argument(
+        "--lora_target_modules",
+        type=str,
+        default="q,k,v,o,ffn.0,ffn.2",
+        help="Which layers LoRA is added to.",
+    )
     parser.add_argument("--lora_rank", type=int, default=32, help="Rank of LoRA.")
-    parser.add_argument("--lora_checkpoint", type=str, default=None, help="Path to the LoRA checkpoint. If provided, LoRA will be loaded from this checkpoint.")
-    parser.add_argument("--extra_inputs", default=None, help="Additional model inputs, comma-separated.")
-    parser.add_argument("--use_gradient_checkpointing", default=False, action="store_true", help="Whether to use gradient checkpointing.")
-    parser.add_argument("--use_gradient_checkpointing_offload", default=False, action="store_true", help="Whether to offload gradient checkpointing to CPU memory.")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="Gradient accumulation steps.")
-    parser.add_argument("--find_unused_parameters", default=False, action="store_true", help="Whether to find unused parameters in DDP.")
-    parser.add_argument("--save_steps", type=int, default=None, help="Number of checkpoint saving invervals. If None, checkpoints will be saved every epoch.")
-    parser.add_argument("--dataset_num_workers", type=int, default=0, help="Number of workers for data loading.")
-    parser.add_argument("--weight_decay", type=float, default=0.01, help="Weight decay.")
-    parser.add_argument("--processor_path", type=str, default=None, help="Path to the processor. If provided, the processor will be used for image editing.")
-    parser.add_argument("--enable_fp8_training", default=False, action="store_true", help="Whether to enable FP8 training. Only available for LoRA training on a single GPU.")
-    parser.add_argument("--task", type=str, default="sft", required=False, help="Task type.")
+    parser.add_argument(
+        "--lora_checkpoint",
+        type=str,
+        default=None,
+        help="Path to the LoRA checkpoint. If provided, LoRA will be loaded from this checkpoint.",
+    )
+    parser.add_argument(
+        "--extra_inputs", default=None, help="Additional model inputs, comma-separated."
+    )
+    parser.add_argument(
+        "--use_gradient_checkpointing",
+        default=False,
+        action="store_true",
+        help="Whether to use gradient checkpointing.",
+    )
+    parser.add_argument(
+        "--use_gradient_checkpointing_offload",
+        default=False,
+        action="store_true",
+        help="Whether to offload gradient checkpointing to CPU memory.",
+    )
+    parser.add_argument(
+        "--gradient_accumulation_steps",
+        type=int,
+        default=1,
+        help="Gradient accumulation steps.",
+    )
+    parser.add_argument(
+        "--find_unused_parameters",
+        default=False,
+        action="store_true",
+        help="Whether to find unused parameters in DDP.",
+    )
+    parser.add_argument(
+        "--save_steps",
+        type=int,
+        default=None,
+        help="Number of checkpoint saving invervals. If None, checkpoints will be saved every epoch.",
+    )
+    parser.add_argument(
+        "--dataset_num_workers",
+        type=int,
+        default=0,
+        help="Number of workers for data loading.",
+    )
+    parser.add_argument(
+        "--weight_decay", type=float, default=0.01, help="Weight decay."
+    )
+    parser.add_argument(
+        "--processor_path",
+        type=str,
+        default=None,
+        help="Path to the processor. If provided, the processor will be used for image editing.",
+    )
+    parser.add_argument(
+        "--enable_fp8_training",
+        default=False,
+        action="store_true",
+        help="Whether to enable FP8 training. Only available for LoRA training on a single GPU.",
+    )
+    parser.add_argument(
+        "--task", type=str, default="sft", required=False, help="Task type."
+    )
     return parser

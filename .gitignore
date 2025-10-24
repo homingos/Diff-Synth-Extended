@@ -1,0 +1,17 @@
+env
+weights/.gitattributes
+weights/config.json
+weights/README.md
+weights/assets/comp_effic.png
+weights/assets/data_for_diff_stage.jpg
+weights/assets/i2v_res.png
+weights/assets/logo.png
+weights/assets/t2v_res.jpg
+weights/assets/vben_1.3b_vs_sota.png
+weights/assets/vben_vs_sota.png
+weights/assets/video_dit_arch.jpg
+weights/assets/video_vae_res.jpg
+**/__pycache__/
+data
+dataset_30FPS
+.gitignore

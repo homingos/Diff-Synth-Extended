@@ -25,8 +25,7 @@ def block_causal_mask(x, block_size):
     # build mask
     mask = torch.zeros(b, n, s, s, dtype=torch.bool, device=device)
     for i in range(num_blocks):
-        mask[:, :,
-             i * block_size:(i + 1) * block_size, :(i + 1) * block_size] = 1
+        mask[:, :, i * block_size : (i + 1) * block_size, : (i + 1) * block_size] = 1
     return mask
 
 
@@ -37,8 +36,14 @@ class CausalConv3d(nn.Conv3d):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self._padding = (self.padding[2], self.padding[2], self.padding[1],
-                         self.padding[1], 2 * self.padding[0], 0)
+        self._padding = (
+            self.padding[2],
+            self.padding[2],
+            self.padding[1],
+            self.padding[1],
+            2 * self.padding[0],
+            0,
+        )
         self.padding = (0, 0, 0)
 
     def forward(self, x, cache_x=None):
@@ -62,12 +67,15 @@ class RMS_norm(nn.Module):
         self.channel_first = channel_first
         self.scale = dim**0.5
         self.gamma = nn.Parameter(torch.ones(shape))
-        self.bias = nn.Parameter(torch.zeros(shape)) if bias else 0.
+        self.bias = nn.Parameter(torch.zeros(shape)) if bias else 0.0
 
     def forward(self, x):
-        return F.normalize(
-            x, dim=(1 if self.channel_first else
-                    -1)) * self.scale * self.gamma + self.bias
+        return (
+            F.normalize(x, dim=(1 if self.channel_first else -1))
+            * self.scale
+            * self.gamma
+            + self.bias
+        )
 
 
 class Upsample(nn.Upsample):
@@ -82,68 +90,81 @@ class Upsample(nn.Upsample):
 class Resample(nn.Module):
 
     def __init__(self, dim, mode):
-        assert mode in ('none', 'upsample2d', 'upsample3d', 'downsample2d',
-                        'downsample3d')
+        assert mode in (
+            "none",
+            "upsample2d",
+            "upsample3d",
+            "downsample2d",
+            "downsample3d",
+        )
         super().__init__()
         self.dim = dim
         self.mode = mode
 
         # layers
-        if mode == 'upsample2d':
+        if mode == "upsample2d":
             self.resample = nn.Sequential(
-                Upsample(scale_factor=(2., 2.), mode='nearest-exact'),
-                nn.Conv2d(dim, dim // 2, 3, padding=1))
-        elif mode == 'upsample3d':
+                Upsample(scale_factor=(2.0, 2.0), mode="nearest-exact"),
+                nn.Conv2d(dim, dim // 2, 3, padding=1),
+            )
+        elif mode == "upsample3d":
             self.resample = nn.Sequential(
-                Upsample(scale_factor=(2., 2.), mode='nearest-exact'),
-                nn.Conv2d(dim, dim // 2, 3, padding=1))
-            self.time_conv = CausalConv3d(dim,
-                                          dim * 2, (3, 1, 1),
-                                          padding=(1, 0, 0))
+                Upsample(scale_factor=(2.0, 2.0), mode="nearest-exact"),
+                nn.Conv2d(dim, dim // 2, 3, padding=1),
+            )
+            self.time_conv = CausalConv3d(dim, dim * 2, (3, 1, 1), padding=(1, 0, 0))
 
-        elif mode == 'downsample2d':
+        elif mode == "downsample2d":
             self.resample = nn.Sequential(
-                nn.ZeroPad2d((0, 1, 0, 1)),
-                nn.Conv2d(dim, dim, 3, stride=(2, 2)))
-        elif mode == 'downsample3d':
+                nn.ZeroPad2d((0, 1, 0, 1)), nn.Conv2d(dim, dim, 3, stride=(2, 2))
+            )
+        elif mode == "downsample3d":
             self.resample = nn.Sequential(
-                nn.ZeroPad2d((0, 1, 0, 1)),
-                nn.Conv2d(dim, dim, 3, stride=(2, 2)))
-            self.time_conv = CausalConv3d(dim,
-                                          dim, (3, 1, 1),
-                                          stride=(2, 1, 1),
-                                          padding=(0, 0, 0))
+                nn.ZeroPad2d((0, 1, 0, 1)), nn.Conv2d(dim, dim, 3, stride=(2, 2))
+            )
+            self.time_conv = CausalConv3d(
+                dim, dim, (3, 1, 1), stride=(2, 1, 1), padding=(0, 0, 0)
+            )
 
         else:
             self.resample = nn.Identity()
 
     def forward(self, x, feat_cache=None, feat_idx=[0]):
         b, c, t, h, w = x.size()
-        if self.mode == 'upsample3d':
+        if self.mode == "upsample3d":
             if feat_cache is not None:
                 idx = feat_idx[0]
                 if feat_cache[idx] is None:
-                    feat_cache[idx] = 'Rep'
+                    feat_cache[idx] = "Rep"
                     feat_idx[0] += 1
                 else:
 
                     cache_x = x[:, :, -CACHE_T:, :, :].clone()
-                    if cache_x.shape[2] < 2 and feat_cache[
-                            idx] is not None and feat_cache[idx] != 'Rep':
+                    if (
+                        cache_x.shape[2] < 2
+                        and feat_cache[idx] is not None
+                        and feat_cache[idx] != "Rep"
+                    ):
                         # cache last frame of last two chunk
-                        cache_x = torch.cat([
-                            feat_cache[idx][:, :, -1, :, :].unsqueeze(2).to(
-                                cache_x.device), cache_x
-                        ],
-                                            dim=2)
-                    if cache_x.shape[2] < 2 and feat_cache[
-                            idx] is not None and feat_cache[idx] == 'Rep':
-                        cache_x = torch.cat([
-                            torch.zeros_like(cache_x).to(cache_x.device),
-                            cache_x
-                        ],
-                                            dim=2)
-                    if feat_cache[idx] == 'Rep':
+                        cache_x = torch.cat(
+                            [
+                                feat_cache[idx][:, :, -1, :, :]
+                                .unsqueeze(2)
+                                .to(cache_x.device),
+                                cache_x,
+                            ],
+                            dim=2,
+                        )
+                    if (
+                        cache_x.shape[2] < 2
+                        and feat_cache[idx] is not None
+                        and feat_cache[idx] == "Rep"
+                    ):
+                        cache_x = torch.cat(
+                            [torch.zeros_like(cache_x).to(cache_x.device), cache_x],
+                            dim=2,
+                        )
+                    if feat_cache[idx] == "Rep":
                         x = self.time_conv(x)
                     else:
                         x = self.time_conv(x, feat_cache[idx])
@@ -151,15 +172,14 @@ class Resample(nn.Module):
                     feat_idx[0] += 1
 
                     x = x.reshape(b, 2, c, t, h, w)
-                    x = torch.stack((x[:, 0, :, :, :, :], x[:, 1, :, :, :, :]),
-                                    3)
+                    x = torch.stack((x[:, 0, :, :, :, :], x[:, 1, :, :, :, :]), 3)
                     x = x.reshape(b, c, t * 2, h, w)
         t = x.shape[2]
-        x = rearrange(x, 'b c t h w -> (b t) c h w')
+        x = rearrange(x, "b c t h w -> (b t) c h w")
         x = self.resample(x)
-        x = rearrange(x, '(b t) c h w -> b c t h w', t=t)
+        x = rearrange(x, "(b t) c h w -> b c t h w", t=t)
 
-        if self.mode == 'downsample3d':
+        if self.mode == "downsample3d":
             if feat_cache is not None:
                 idx = feat_idx[0]
                 if feat_cache[idx] is None:
@@ -168,7 +188,8 @@ class Resample(nn.Module):
                 else:
                     cache_x = x[:, :, -1:, :, :].clone()
                     x = self.time_conv(
-                        torch.cat([feat_cache[idx][:, :, -1:, :, :], x], 2))
+                        torch.cat([feat_cache[idx][:, :, -1:, :, :], x], 2)
+                    )
                     feat_cache[idx] = cache_x
                     feat_idx[0] += 1
         return x
@@ -189,11 +210,10 @@ class Resample(nn.Module):
         nn.init.zeros_(conv_weight)
         c1, c2, t, h, w = conv_weight.size()
         init_matrix = torch.eye(c1 // 2, c2)
-        conv_weight[:c1 // 2, :, -1, 0, 0] = init_matrix
-        conv_weight[c1 // 2:, :, -1, 0, 0] = init_matrix
+        conv_weight[: c1 // 2, :, -1, 0, 0] = init_matrix
+        conv_weight[c1 // 2 :, :, -1, 0, 0] = init_matrix
         conv.weight.data.copy_(conv_weight)
         nn.init.zeros_(conv.bias.data)
-
 
 
 def patchify(x, patch_size):
@@ -202,10 +222,9 @@ def patchify(x, patch_size):
     if x.dim() == 4:
         x = rearrange(x, "b c (h q) (w r) -> b (c r q) h w", q=patch_size, r=patch_size)
     elif x.dim() == 5:
-        x = rearrange(x,
-                      "b c f (h q) (w r) -> b (c r q) f h w",
-                      q=patch_size,
-                      r=patch_size)
+        x = rearrange(
+            x, "b c f (h q) (w r) -> b (c r q) f h w", q=patch_size, r=patch_size
+        )
     else:
         raise ValueError(f"Invalid input shape: {x.shape}")
     return x
@@ -217,10 +236,9 @@ def unpatchify(x, patch_size):
     if x.dim() == 4:
         x = rearrange(x, "b (c r q) h w -> b c (h q) (w r)", q=patch_size, r=patch_size)
     elif x.dim() == 5:
-        x = rearrange(x,
-                      "b (c r q) f h w -> b c f (h q) (w r)",
-                      q=patch_size,
-                      r=patch_size)
+        x = rearrange(
+            x, "b (c r q) f h w -> b c f (h q) (w r)", q=patch_size, r=patch_size
+        )
     return x
 
 
@@ -264,6 +282,7 @@ class Resample38(Resample):
         else:
             self.resample = nn.Identity()
 
+
 class ResidualBlock(nn.Module):
 
     def __init__(self, in_dim, out_dim, dropout=0.0):
@@ -273,12 +292,17 @@ class ResidualBlock(nn.Module):
 
         # layers
         self.residual = nn.Sequential(
-            RMS_norm(in_dim, images=False), nn.SiLU(),
+            RMS_norm(in_dim, images=False),
+            nn.SiLU(),
             CausalConv3d(in_dim, out_dim, 3, padding=1),
-            RMS_norm(out_dim, images=False), nn.SiLU(), nn.Dropout(dropout),
-            CausalConv3d(out_dim, out_dim, 3, padding=1))
-        self.shortcut = CausalConv3d(in_dim, out_dim, 1) \
-            if in_dim != out_dim else nn.Identity()
+            RMS_norm(out_dim, images=False),
+            nn.SiLU(),
+            nn.Dropout(dropout),
+            CausalConv3d(out_dim, out_dim, 3, padding=1),
+        )
+        self.shortcut = (
+            CausalConv3d(in_dim, out_dim, 1) if in_dim != out_dim else nn.Identity()
+        )
 
     def forward(self, x, feat_cache=None, feat_idx=[0]):
         h = self.shortcut(x)
@@ -288,11 +312,15 @@ class ResidualBlock(nn.Module):
                 cache_x = x[:, :, -CACHE_T:, :, :].clone()
                 if cache_x.shape[2] < 2 and feat_cache[idx] is not None:
                     # cache last frame of last two chunk
-                    cache_x = torch.cat([
-                        feat_cache[idx][:, :, -1, :, :].unsqueeze(2).to(
-                            cache_x.device), cache_x
-                    ],
-                                        dim=2)
+                    cache_x = torch.cat(
+                        [
+                            feat_cache[idx][:, :, -1, :, :]
+                            .unsqueeze(2)
+                            .to(cache_x.device),
+                            cache_x,
+                        ],
+                        dim=2,
+                    )
                 x = layer(x, feat_cache[idx])
                 feat_cache[idx] = cache_x
                 feat_idx[0] += 1
@@ -321,25 +349,97 @@ class AttentionBlock(nn.Module):
     def forward(self, x):
         identity = x
         b, c, t, h, w = x.size()
-        x = rearrange(x, 'b c t h w -> (b t) c h w')
+        x = rearrange(x, "b c t h w -> (b t) c h w")
         x = self.norm(x)
         # compute query, key, value
-        q, k, v = self.to_qkv(x).reshape(b * t, 1, c * 3, -1).permute(
-            0, 1, 3, 2).contiguous().chunk(3, dim=-1)
+        q, k, v = (
+            self.to_qkv(x)
+            .reshape(b * t, 1, c * 3, -1)
+            .permute(0, 1, 3, 2)
+            .contiguous()
+            .chunk(3, dim=-1)
+        )
 
         # apply attention
         x = F.scaled_dot_product_attention(
             q,
             k,
             v,
-            #attn_mask=block_causal_mask(q, block_size=h * w)
+            # attn_mask=block_causal_mask(q, block_size=h * w)
         )
         x = x.squeeze(1).permute(0, 2, 1).reshape(b * t, c, h, w)
 
         # output
         x = self.proj(x)
-        x = rearrange(x, '(b t) c h w-> b c t h w', t=t)
+        x = rearrange(x, "(b t) c h w-> b c t h w", t=t)
         return x + identity
+
+
+class FeatureMergeBlock(nn.Module):
+    """
+    Feature merging block for RGB-Alpha VAE (Wan-Alpha paper Figure 3).
+    Concatenates RGB and alpha features, then applies causal convolutions and attention.
+
+    Architecture:
+    - Input: RGB features (16-dim) + Alpha features (16-dim)
+    - Concat: 32-dim
+    - Causal 3D Conv + Attention blocks
+    - Output: Merged latent (16-dim)
+    """
+
+    def __init__(self, input_dim=16, num_res_blocks=3, dropout=0.0):
+        """
+        Args:
+            input_dim: Dimension of each input feature (RGB and alpha separately)
+            num_res_blocks: Number of residual blocks to use
+            dropout: Dropout rate
+        """
+        super().__init__()
+        self.input_dim = input_dim
+        concat_dim = input_dim * 2  # 32 for RGB + Alpha
+
+        # Initial causal convolution to merge concatenated features
+        self.conv_in = CausalConv3d(concat_dim, input_dim * 12, 3, padding=1)
+
+        # Residual blocks with attention
+        self.res_blocks = nn.ModuleList()
+        self.attn_blocks = nn.ModuleList()
+
+        for i in range(num_res_blocks):
+            self.res_blocks.append(
+                ResidualBlock(input_dim * 12, input_dim * 12, dropout=dropout)
+            )
+            self.attn_blocks.append(AttentionBlock(input_dim * 12))
+
+        # Final causal convolution to output merged latent
+        self.conv_out = CausalConv3d(input_dim * 12, input_dim, 3, padding=1)
+
+    def forward(self, rgb_features, alpha_features):
+        """
+        Merge RGB and alpha features.
+
+        Args:
+            rgb_features: Tensor [B, C, T, H, W] - RGB latent features
+            alpha_features: Tensor [B, C, T, H, W] - Alpha latent features
+
+        Returns:
+            merged_latent: Tensor [B, C, T, H, W] - Merged latent representation
+        """
+        # Concatenate RGB and alpha features along channel dimension
+        x = torch.cat([rgb_features, alpha_features], dim=1)  # [B, 2C, T, H, W]
+
+        # Initial convolution
+        x = self.conv_in(x)
+
+        # Apply residual blocks with attention
+        for res_block, attn_block in zip(self.res_blocks, self.attn_blocks):
+            x = res_block(x)
+            x = attn_block(x)
+
+        # Final convolution to get merged latent
+        merged_latent = self.conv_out(x)
+
+        return merged_latent
 
 
 class AvgDown3D(nn.Module):
@@ -516,14 +616,16 @@ class Up_ResidualBlock(nn.Module):
 
 class Encoder3d(nn.Module):
 
-    def __init__(self,
-                 dim=128,
-                 z_dim=4,
-                 dim_mult=[1, 2, 4, 4],
-                 num_res_blocks=2,
-                 attn_scales=[],
-                 temperal_downsample=[True, True, False],
-                 dropout=0.0):
+    def __init__(
+        self,
+        dim=128,
+        z_dim=4,
+        dim_mult=[1, 2, 4, 4],
+        num_res_blocks=2,
+        attn_scales=[],
+        temperal_downsample=[True, True, False],
+        dropout=0.0,
+    ):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -551,20 +653,24 @@ class Encoder3d(nn.Module):
 
             # downsample block
             if i != len(dim_mult) - 1:
-                mode = 'downsample3d' if temperal_downsample[
-                    i] else 'downsample2d'
+                mode = "downsample3d" if temperal_downsample[i] else "downsample2d"
                 downsamples.append(Resample(out_dim, mode=mode))
                 scale /= 2.0
         self.downsamples = nn.Sequential(*downsamples)
 
         # middle blocks
-        self.middle = nn.Sequential(ResidualBlock(out_dim, out_dim, dropout),
-                                    AttentionBlock(out_dim),
-                                    ResidualBlock(out_dim, out_dim, dropout))
+        self.middle = nn.Sequential(
+            ResidualBlock(out_dim, out_dim, dropout),
+            AttentionBlock(out_dim),
+            ResidualBlock(out_dim, out_dim, dropout),
+        )
 
         # output blocks
-        self.head = nn.Sequential(RMS_norm(out_dim, images=False), nn.SiLU(),
-                                  CausalConv3d(out_dim, z_dim, 3, padding=1))
+        self.head = nn.Sequential(
+            RMS_norm(out_dim, images=False),
+            nn.SiLU(),
+            CausalConv3d(out_dim, z_dim, 3, padding=1),
+        )
 
     def forward(self, x, feat_cache=None, feat_idx=[0]):
         if feat_cache is not None:
@@ -572,11 +678,13 @@ class Encoder3d(nn.Module):
             cache_x = x[:, :, -CACHE_T:, :, :].clone()
             if cache_x.shape[2] < 2 and feat_cache[idx] is not None:
                 # cache last frame of last two chunk
-                cache_x = torch.cat([
-                    feat_cache[idx][:, :, -1, :, :].unsqueeze(2).to(
-                        cache_x.device), cache_x
-                ],
-                                    dim=2)
+                cache_x = torch.cat(
+                    [
+                        feat_cache[idx][:, :, -1, :, :].unsqueeze(2).to(cache_x.device),
+                        cache_x,
+                    ],
+                    dim=2,
+                )
             x = self.conv1(x, feat_cache[idx])
             feat_cache[idx] = cache_x
             feat_idx[0] += 1
@@ -604,11 +712,15 @@ class Encoder3d(nn.Module):
                 cache_x = x[:, :, -CACHE_T:, :, :].clone()
                 if cache_x.shape[2] < 2 and feat_cache[idx] is not None:
                     # cache last frame of last two chunk
-                    cache_x = torch.cat([
-                        feat_cache[idx][:, :, -1, :, :].unsqueeze(2).to(
-                            cache_x.device), cache_x
-                    ],
-                                        dim=2)
+                    cache_x = torch.cat(
+                        [
+                            feat_cache[idx][:, :, -1, :, :]
+                            .unsqueeze(2)
+                            .to(cache_x.device),
+                            cache_x,
+                        ],
+                        dim=2,
+                    )
                 x = layer(x, feat_cache[idx])
                 feat_cache[idx] = cache_x
                 feat_idx[0] += 1
@@ -619,14 +731,16 @@ class Encoder3d(nn.Module):
 
 class Encoder3d_38(nn.Module):
 
-    def __init__(self,
-                 dim=128,
-                 z_dim=4,
-                 dim_mult=[1, 2, 4, 4],
-                 num_res_blocks=2,
-                 attn_scales=[],
-                 temperal_downsample=[False, True, True],
-                 dropout=0.0):
+    def __init__(
+        self,
+        dim=128,
+        z_dim=4,
+        dim_mult=[1, 2, 4, 4],
+        num_res_blocks=2,
+        attn_scales=[],
+        temperal_downsample=[False, True, True],
+        dropout=0.0,
+    ):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -674,7 +788,6 @@ class Encoder3d_38(nn.Module):
             nn.SiLU(),
             CausalConv3d(out_dim, z_dim, 3, padding=1),
         )
-
 
     def forward(self, x, feat_cache=None, feat_idx=[0]):
 
@@ -735,14 +848,16 @@ class Encoder3d_38(nn.Module):
 
 class Decoder3d(nn.Module):
 
-    def __init__(self,
-                 dim=128,
-                 z_dim=4,
-                 dim_mult=[1, 2, 4, 4],
-                 num_res_blocks=2,
-                 attn_scales=[],
-                 temperal_upsample=[False, True, True],
-                 dropout=0.0):
+    def __init__(
+        self,
+        dim=128,
+        z_dim=4,
+        dim_mult=[1, 2, 4, 4],
+        num_res_blocks=2,
+        attn_scales=[],
+        temperal_upsample=[False, True, True],
+        dropout=0.0,
+    ):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -753,15 +868,17 @@ class Decoder3d(nn.Module):
 
         # dimensions
         dims = [dim * u for u in [dim_mult[-1]] + dim_mult[::-1]]
-        scale = 1.0 / 2**(len(dim_mult) - 2)
+        scale = 1.0 / 2 ** (len(dim_mult) - 2)
 
         # init block
         self.conv1 = CausalConv3d(z_dim, dims[0], 3, padding=1)
 
         # middle blocks
-        self.middle = nn.Sequential(ResidualBlock(dims[0], dims[0], dropout),
-                                    AttentionBlock(dims[0]),
-                                    ResidualBlock(dims[0], dims[0], dropout))
+        self.middle = nn.Sequential(
+            ResidualBlock(dims[0], dims[0], dropout),
+            AttentionBlock(dims[0]),
+            ResidualBlock(dims[0], dims[0], dropout),
+        )
 
         # upsample blocks
         upsamples = []
@@ -777,14 +894,17 @@ class Decoder3d(nn.Module):
 
             # upsample block
             if i != len(dim_mult) - 1:
-                mode = 'upsample3d' if temperal_upsample[i] else 'upsample2d'
+                mode = "upsample3d" if temperal_upsample[i] else "upsample2d"
                 upsamples.append(Resample(out_dim, mode=mode))
                 scale *= 2.0
         self.upsamples = nn.Sequential(*upsamples)
 
         # output blocks
-        self.head = nn.Sequential(RMS_norm(out_dim, images=False), nn.SiLU(),
-                                  CausalConv3d(out_dim, 3, 3, padding=1))
+        self.head = nn.Sequential(
+            RMS_norm(out_dim, images=False),
+            nn.SiLU(),
+            CausalConv3d(out_dim, 3, 3, padding=1),
+        )
 
     def forward(self, x, feat_cache=None, feat_idx=[0]):
         ## conv1
@@ -793,11 +913,13 @@ class Decoder3d(nn.Module):
             cache_x = x[:, :, -CACHE_T:, :, :].clone()
             if cache_x.shape[2] < 2 and feat_cache[idx] is not None:
                 # cache last frame of last two chunk
-                cache_x = torch.cat([
-                    feat_cache[idx][:, :, -1, :, :].unsqueeze(2).to(
-                        cache_x.device), cache_x
-                ],
-                                    dim=2)
+                cache_x = torch.cat(
+                    [
+                        feat_cache[idx][:, :, -1, :, :].unsqueeze(2).to(cache_x.device),
+                        cache_x,
+                    ],
+                    dim=2,
+                )
             x = self.conv1(x, feat_cache[idx])
             feat_cache[idx] = cache_x
             feat_idx[0] += 1
@@ -825,11 +947,15 @@ class Decoder3d(nn.Module):
                 cache_x = x[:, :, -CACHE_T:, :, :].clone()
                 if cache_x.shape[2] < 2 and feat_cache[idx] is not None:
                     # cache last frame of last two chunk
-                    cache_x = torch.cat([
-                        feat_cache[idx][:, :, -1, :, :].unsqueeze(2).to(
-                            cache_x.device), cache_x
-                    ],
-                                        dim=2)
+                    cache_x = torch.cat(
+                        [
+                            feat_cache[idx][:, :, -1, :, :]
+                            .unsqueeze(2)
+                            .to(cache_x.device),
+                            cache_x,
+                        ],
+                        dim=2,
+                    )
                 x = layer(x, feat_cache[idx])
                 feat_cache[idx] = cache_x
                 feat_idx[0] += 1
@@ -838,17 +964,18 @@ class Decoder3d(nn.Module):
         return x
 
 
-
 class Decoder3d_38(nn.Module):
 
-    def __init__(self,
-                 dim=128,
-                 z_dim=4,
-                 dim_mult=[1, 2, 4, 4],
-                 num_res_blocks=2,
-                 attn_scales=[],
-                 temperal_upsample=[False, True, True],
-                 dropout=0.0):
+    def __init__(
+        self,
+        dim=128,
+        z_dim=4,
+        dim_mult=[1, 2, 4, 4],
+        num_res_blocks=2,
+        attn_scales=[],
+        temperal_upsample=[False, True, True],
+        dropout=0.0,
+    ):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -864,27 +991,34 @@ class Decoder3d_38(nn.Module):
         self.conv1 = CausalConv3d(z_dim, dims[0], 3, padding=1)
 
         # middle blocks
-        self.middle = nn.Sequential(ResidualBlock(dims[0], dims[0], dropout),
-                                    AttentionBlock(dims[0]),
-                                    ResidualBlock(dims[0], dims[0], dropout))
+        self.middle = nn.Sequential(
+            ResidualBlock(dims[0], dims[0], dropout),
+            AttentionBlock(dims[0]),
+            ResidualBlock(dims[0], dims[0], dropout),
+        )
 
         # upsample blocks
         upsamples = []
         for i, (in_dim, out_dim) in enumerate(zip(dims[:-1], dims[1:])):
             t_up_flag = temperal_upsample[i] if i < len(temperal_upsample) else False
             upsamples.append(
-                Up_ResidualBlock(in_dim=in_dim,
-                                 out_dim=out_dim,
-                                 dropout=dropout,
-                                 mult=num_res_blocks + 1,
-                                 temperal_upsample=t_up_flag,
-                                 up_flag=i != len(dim_mult) - 1))
+                Up_ResidualBlock(
+                    in_dim=in_dim,
+                    out_dim=out_dim,
+                    dropout=dropout,
+                    mult=num_res_blocks + 1,
+                    temperal_upsample=t_up_flag,
+                    up_flag=i != len(dim_mult) - 1,
+                )
+            )
         self.upsamples = nn.Sequential(*upsamples)
 
         # output blocks
-        self.head = nn.Sequential(RMS_norm(out_dim, images=False), nn.SiLU(),
-                                  CausalConv3d(out_dim, 12, 3, padding=1))
-
+        self.head = nn.Sequential(
+            RMS_norm(out_dim, images=False),
+            nn.SiLU(),
+            CausalConv3d(out_dim, 12, 3, padding=1),
+        )
 
     def forward(self, x, feat_cache=None, feat_idx=[0], first_chunk=False):
         if feat_cache is not None:
@@ -950,14 +1084,16 @@ def count_conv3d(model):
 
 class VideoVAE_(nn.Module):
 
-    def __init__(self,
-                 dim=96,
-                 z_dim=16,
-                 dim_mult=[1, 2, 4, 4],
-                 num_res_blocks=2,
-                 attn_scales=[],
-                 temperal_downsample=[False, True, True],
-                 dropout=0.0):
+    def __init__(
+        self,
+        dim=96,
+        z_dim=16,
+        dim_mult=[1, 2, 4, 4],
+        num_res_blocks=2,
+        attn_scales=[],
+        temperal_downsample=[False, True, True],
+        dropout=0.0,
+    ):
         super().__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -968,12 +1104,26 @@ class VideoVAE_(nn.Module):
         self.temperal_upsample = temperal_downsample[::-1]
 
         # modules
-        self.encoder = Encoder3d(dim, z_dim * 2, dim_mult, num_res_blocks,
-                                 attn_scales, self.temperal_downsample, dropout)
+        self.encoder = Encoder3d(
+            dim,
+            z_dim * 2,
+            dim_mult,
+            num_res_blocks,
+            attn_scales,
+            self.temperal_downsample,
+            dropout,
+        )
         self.conv1 = CausalConv3d(z_dim * 2, z_dim * 2, 1)
         self.conv2 = CausalConv3d(z_dim, z_dim, 1)
-        self.decoder = Decoder3d(dim, z_dim, dim_mult, num_res_blocks,
-                                 attn_scales, self.temperal_upsample, dropout)
+        self.decoder = Decoder3d(
+            dim,
+            z_dim,
+            dim_mult,
+            num_res_blocks,
+            attn_scales,
+            self.temperal_upsample,
+            dropout,
+        )
 
     def forward(self, x):
         mu, log_var = self.encode(x)
@@ -990,19 +1140,24 @@ class VideoVAE_(nn.Module):
         for i in range(iter_):
             self._enc_conv_idx = [0]
             if i == 0:
-                out = self.encoder(x[:, :, :1, :, :],
-                                   feat_cache=self._enc_feat_map,
-                                   feat_idx=self._enc_conv_idx)
+                out = self.encoder(
+                    x[:, :, :1, :, :],
+                    feat_cache=self._enc_feat_map,
+                    feat_idx=self._enc_conv_idx,
+                )
             else:
-                out_ = self.encoder(x[:, :, 1 + 4 * (i - 1):1 + 4 * i, :, :],
-                                    feat_cache=self._enc_feat_map,
-                                    feat_idx=self._enc_conv_idx)
+                out_ = self.encoder(
+                    x[:, :, 1 + 4 * (i - 1) : 1 + 4 * i, :, :],
+                    feat_cache=self._enc_feat_map,
+                    feat_idx=self._enc_conv_idx,
+                )
                 out = torch.cat([out, out_], 2)
         mu, log_var = self.conv1(out).chunk(2, dim=1)
         if isinstance(scale[0], torch.Tensor):
             scale = [s.to(dtype=mu.dtype, device=mu.device) for s in scale]
             mu = (mu - scale[0].view(1, self.z_dim, 1, 1, 1)) * scale[1].view(
-                1, self.z_dim, 1, 1, 1)
+                1, self.z_dim, 1, 1, 1
+            )
         else:
             scale = scale.to(dtype=mu.dtype, device=mu.device)
             mu = (mu - scale[0]) * scale[1]
@@ -1014,7 +1169,8 @@ class VideoVAE_(nn.Module):
         if isinstance(scale[0], torch.Tensor):
             scale = [s.to(dtype=z.dtype, device=z.device) for s in scale]
             z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(
-                1, self.z_dim, 1, 1, 1)
+                1, self.z_dim, 1, 1, 1
+            )
         else:
             scale = scale.to(dtype=z.dtype, device=z.device)
             z = z / scale[1] + scale[0]
@@ -1023,14 +1179,18 @@ class VideoVAE_(nn.Module):
         for i in range(iter_):
             self._conv_idx = [0]
             if i == 0:
-                out = self.decoder(x[:, :, i:i + 1, :, :],
-                                   feat_cache=self._feat_map,
-                                   feat_idx=self._conv_idx)
+                out = self.decoder(
+                    x[:, :, i : i + 1, :, :],
+                    feat_cache=self._feat_map,
+                    feat_idx=self._conv_idx,
+                )
             else:
-                out_ = self.decoder(x[:, :, i:i + 1, :, :],
-                                    feat_cache=self._feat_map,
-                                    feat_idx=self._conv_idx)
-                out = torch.cat([out, out_], 2) # may add tensor offload
+                out_ = self.decoder(
+                    x[:, :, i : i + 1, :, :],
+                    feat_cache=self._feat_map,
+                    feat_idx=self._conv_idx,
+                )
+                out = torch.cat([out, out_], 2)  # may add tensor offload
         return out
 
     def reparameterize(self, mu, log_var):
@@ -1061,12 +1221,40 @@ class WanVideoVAE(nn.Module):
         super().__init__()
 
         mean = [
-            -0.7571, -0.7089, -0.9113, 0.1075, -0.1745, 0.9653, -0.1517, 1.5508,
-            0.4134, -0.0715, 0.5517, -0.3632, -0.1922, -0.9497, 0.2503, -0.2921
+            -0.7571,
+            -0.7089,
+            -0.9113,
+            0.1075,
+            -0.1745,
+            0.9653,
+            -0.1517,
+            1.5508,
+            0.4134,
+            -0.0715,
+            0.5517,
+            -0.3632,
+            -0.1922,
+            -0.9497,
+            0.2503,
+            -0.2921,
         ]
         std = [
-            2.8184, 1.4541, 2.3275, 2.6558, 1.2196, 1.7708, 2.6052, 2.0743,
-            3.2687, 2.1526, 2.8652, 1.5579, 1.6382, 1.1253, 2.8251, 1.9160
+            2.8184,
+            1.4541,
+            2.3275,
+            2.6558,
+            1.2196,
+            1.7708,
+            2.6052,
+            2.0743,
+            3.2687,
+            2.1526,
+            2.8652,
+            1.5579,
+            1.6382,
+            1.1253,
+            2.8251,
+            1.9160,
         ]
         self.mean = torch.tensor(mean)
         self.std = torch.tensor(std)
@@ -1077,15 +1265,15 @@ class WanVideoVAE(nn.Module):
         self.upsampling_factor = 8
         self.z_dim = z_dim
 
-
     def build_1d_mask(self, length, left_bound, right_bound, border_width):
         x = torch.ones((length,))
         if not left_bound:
             x[:border_width] = (torch.arange(border_width) + 1) / border_width
         if not right_bound:
-            x[-border_width:] = torch.flip((torch.arange(border_width) + 1) / border_width, dims=(0,))
+            x[-border_width:] = torch.flip(
+                (torch.arange(border_width) + 1) / border_width, dims=(0,)
+            )
         return x
-
 
     def build_mask(self, data, is_bound, border_width):
         _, _, _, H, W = data.shape
@@ -1099,7 +1287,6 @@ class WanVideoVAE(nn.Module):
         mask = rearrange(mask, "H W -> 1 1 1 H W")
         return mask
 
-
     def tiled_decode(self, hidden_states, device, tile_size, tile_stride):
         _, _, T, H, W = hidden_states.shape
         size_h, size_w = tile_size
@@ -1108,9 +1295,11 @@ class WanVideoVAE(nn.Module):
         # Split tasks
         tasks = []
         for h in range(0, H, stride_h):
-            if (h-stride_h >= 0 and h-stride_h+size_h >= H): continue
+            if h - stride_h >= 0 and h - stride_h + size_h >= H:
+                continue
             for w in range(0, W, stride_w):
-                if (w-stride_w >= 0 and w-stride_w+size_w >= W): continue
+                if w - stride_w >= 0 and w - stride_w + size_w >= W:
+                    continue
                 h_, w_ = h + size_h, w + size_w
                 tasks.append((h, h_, w, w_))
 
@@ -1118,17 +1307,32 @@ class WanVideoVAE(nn.Module):
         computation_device = device
 
         out_T = T * 4 - 3
-        weight = torch.zeros((1, 1, out_T, H * self.upsampling_factor, W * self.upsampling_factor), dtype=hidden_states.dtype, device=data_device)
-        values = torch.zeros((1, 3, out_T, H * self.upsampling_factor, W * self.upsampling_factor), dtype=hidden_states.dtype, device=data_device)
+        weight = torch.zeros(
+            (1, 1, out_T, H * self.upsampling_factor, W * self.upsampling_factor),
+            dtype=hidden_states.dtype,
+            device=data_device,
+        )
+        values = torch.zeros(
+            (1, 3, out_T, H * self.upsampling_factor, W * self.upsampling_factor),
+            dtype=hidden_states.dtype,
+            device=data_device,
+        )
 
         for h, h_, w, w_ in tqdm(tasks, desc="VAE decoding"):
-            hidden_states_batch = hidden_states[:, :, :, h:h_, w:w_].to(computation_device)
-            hidden_states_batch = self.model.decode(hidden_states_batch, self.scale).to(data_device)
+            hidden_states_batch = hidden_states[:, :, :, h:h_, w:w_].to(
+                computation_device
+            )
+            hidden_states_batch = self.model.decode(hidden_states_batch, self.scale).to(
+                data_device
+            )
 
             mask = self.build_mask(
                 hidden_states_batch,
-                is_bound=(h==0, h_>=H, w==0, w_>=W),
-                border_width=((size_h - stride_h) * self.upsampling_factor, (size_w - stride_w) * self.upsampling_factor)
+                is_bound=(h == 0, h_ >= H, w == 0, w_ >= W),
+                border_width=(
+                    (size_h - stride_h) * self.upsampling_factor,
+                    (size_w - stride_w) * self.upsampling_factor,
+                ),
             ).to(dtype=hidden_states.dtype, device=data_device)
 
             target_h = h * self.upsampling_factor
@@ -1137,20 +1341,21 @@ class WanVideoVAE(nn.Module):
                 :,
                 :,
                 :,
-                target_h:target_h + hidden_states_batch.shape[3],
-                target_w:target_w + hidden_states_batch.shape[4],
-            ] += hidden_states_batch * mask
+                target_h : target_h + hidden_states_batch.shape[3],
+                target_w : target_w + hidden_states_batch.shape[4],
+            ] += (
+                hidden_states_batch * mask
+            )
             weight[
                 :,
                 :,
                 :,
-                target_h: target_h + hidden_states_batch.shape[3],
-                target_w: target_w + hidden_states_batch.shape[4],
+                target_h : target_h + hidden_states_batch.shape[3],
+                target_w : target_w + hidden_states_batch.shape[4],
             ] += mask
         values = values / weight
         values = values.clamp_(-1, 1)
         return values
-
 
     def tiled_encode(self, video, device, tile_size, tile_stride):
         _, _, T, H, W = video.shape
@@ -1160,9 +1365,11 @@ class WanVideoVAE(nn.Module):
         # Split tasks
         tasks = []
         for h in range(0, H, stride_h):
-            if (h-stride_h >= 0 and h-stride_h+size_h >= H): continue
+            if h - stride_h >= 0 and h - stride_h + size_h >= H:
+                continue
             for w in range(0, W, stride_w):
-                if (w-stride_w >= 0 and w-stride_w+size_w >= W): continue
+                if w - stride_w >= 0 and w - stride_w + size_w >= W:
+                    continue
                 h_, w_ = h + size_h, w + size_w
                 tasks.append((h, h_, w, w_))
 
@@ -1170,17 +1377,36 @@ class WanVideoVAE(nn.Module):
         computation_device = device
 
         out_T = (T + 3) // 4
-        weight = torch.zeros((1, 1, out_T, H // self.upsampling_factor, W // self.upsampling_factor), dtype=video.dtype, device=data_device)
-        values = torch.zeros((1, self.z_dim, out_T, H // self.upsampling_factor, W // self.upsampling_factor), dtype=video.dtype, device=data_device)
+        weight = torch.zeros(
+            (1, 1, out_T, H // self.upsampling_factor, W // self.upsampling_factor),
+            dtype=video.dtype,
+            device=data_device,
+        )
+        values = torch.zeros(
+            (
+                1,
+                self.z_dim,
+                out_T,
+                H // self.upsampling_factor,
+                W // self.upsampling_factor,
+            ),
+            dtype=video.dtype,
+            device=data_device,
+        )
 
         for h, h_, w, w_ in tqdm(tasks, desc="VAE encoding"):
             hidden_states_batch = video[:, :, :, h:h_, w:w_].to(computation_device)
-            hidden_states_batch = self.model.encode(hidden_states_batch, self.scale).to(data_device)
+            hidden_states_batch = self.model.encode(hidden_states_batch, self.scale).to(
+                data_device
+            )
 
             mask = self.build_mask(
                 hidden_states_batch,
-                is_bound=(h==0, h_>=H, w==0, w_>=W),
-                border_width=((size_h - stride_h) // self.upsampling_factor, (size_w - stride_w) // self.upsampling_factor)
+                is_bound=(h == 0, h_ >= H, w == 0, w_ >= W),
+                border_width=(
+                    (size_h - stride_h) // self.upsampling_factor,
+                    (size_w - stride_w) // self.upsampling_factor,
+                ),
             ).to(dtype=video.dtype, device=data_device)
 
             target_h = h // self.upsampling_factor
@@ -1189,40 +1415,47 @@ class WanVideoVAE(nn.Module):
                 :,
                 :,
                 :,
-                target_h:target_h + hidden_states_batch.shape[3],
-                target_w:target_w + hidden_states_batch.shape[4],
-            ] += hidden_states_batch * mask
+                target_h : target_h + hidden_states_batch.shape[3],
+                target_w : target_w + hidden_states_batch.shape[4],
+            ] += (
+                hidden_states_batch * mask
+            )
             weight[
                 :,
                 :,
                 :,
-                target_h: target_h + hidden_states_batch.shape[3],
-                target_w: target_w + hidden_states_batch.shape[4],
+                target_h : target_h + hidden_states_batch.shape[3],
+                target_w : target_w + hidden_states_batch.shape[4],
             ] += mask
         values = values / weight
         return values
-
 
     def single_encode(self, video, device):
         video = video.to(device)
         x = self.model.encode(video, self.scale)
         return x
 
-
     def single_decode(self, hidden_state, device):
         hidden_state = hidden_state.to(device)
         video = self.model.decode(hidden_state, self.scale)
         return video.clamp_(-1, 1)
 
-
-    def encode(self, videos, device, tiled=False, tile_size=(34, 34), tile_stride=(18, 16)):
+    def encode(
+        self, videos, device, tiled=False, tile_size=(34, 34), tile_stride=(18, 16)
+    ):
         videos = [video.to("cpu") for video in videos]
         hidden_states = []
         for video in videos:
             video = video.unsqueeze(0)
             if tiled:
-                tile_size = (tile_size[0] * self.upsampling_factor, tile_size[1] * self.upsampling_factor)
-                tile_stride = (tile_stride[0] * self.upsampling_factor, tile_stride[1] * self.upsampling_factor)
+                tile_size = (
+                    tile_size[0] * self.upsampling_factor,
+                    tile_size[1] * self.upsampling_factor,
+                )
+                tile_stride = (
+                    tile_stride[0] * self.upsampling_factor,
+                    tile_stride[1] * self.upsampling_factor,
+                )
                 hidden_state = self.tiled_encode(video, device, tile_size, tile_stride)
             else:
                 hidden_state = self.single_encode(video, device)
@@ -1231,8 +1464,14 @@ class WanVideoVAE(nn.Module):
         hidden_states = torch.stack(hidden_states)
         return hidden_states
 
-
-    def decode(self, hidden_states, device, tiled=False, tile_size=(34, 34), tile_stride=(18, 16)):
+    def decode(
+        self,
+        hidden_states,
+        device,
+        tiled=False,
+        tile_size=(34, 34),
+        tile_stride=(18, 16),
+    ):
         hidden_states = [hidden_state.to("cpu") for hidden_state in hidden_states]
         videos = []
         for hidden_state in hidden_states:
@@ -1246,7 +1485,6 @@ class WanVideoVAE(nn.Module):
         videos = torch.stack(videos)
         return videos
 
-
     @staticmethod
     def state_dict_converter():
         return WanVideoVAEStateDictConverter()
@@ -1259,24 +1497,26 @@ class WanVideoVAEStateDictConverter:
 
     def from_civitai(self, state_dict):
         state_dict_ = {}
-        if 'model_state' in state_dict:
-            state_dict = state_dict['model_state']
+        if "model_state" in state_dict:
+            state_dict = state_dict["model_state"]
         for name in state_dict:
-            state_dict_['model.' + name] = state_dict[name]
+            state_dict_["model." + name] = state_dict[name]
         return state_dict_
 
 
 class VideoVAE38_(VideoVAE_):
 
-    def __init__(self,
-                 dim=160,
-                 z_dim=48,
-                 dec_dim=256,
-                 dim_mult=[1, 2, 4, 4],
-                 num_res_blocks=2,
-                 attn_scales=[],
-                 temperal_downsample=[False, True, True],
-                 dropout=0.0):
+    def __init__(
+        self,
+        dim=160,
+        z_dim=48,
+        dec_dim=256,
+        dim_mult=[1, 2, 4, 4],
+        num_res_blocks=2,
+        attn_scales=[],
+        temperal_downsample=[False, True, True],
+        dropout=0.0,
+    ):
         super(VideoVAE_, self).__init__()
         self.dim = dim
         self.z_dim = z_dim
@@ -1287,13 +1527,26 @@ class VideoVAE38_(VideoVAE_):
         self.temperal_upsample = temperal_downsample[::-1]
 
         # modules
-        self.encoder = Encoder3d_38(dim, z_dim * 2, dim_mult, num_res_blocks,
-                                    attn_scales, self.temperal_downsample, dropout)
+        self.encoder = Encoder3d_38(
+            dim,
+            z_dim * 2,
+            dim_mult,
+            num_res_blocks,
+            attn_scales,
+            self.temperal_downsample,
+            dropout,
+        )
         self.conv1 = CausalConv3d(z_dim * 2, z_dim * 2, 1)
         self.conv2 = CausalConv3d(z_dim, z_dim, 1)
-        self.decoder = Decoder3d_38(dec_dim, z_dim, dim_mult, num_res_blocks,
-                                    attn_scales, self.temperal_upsample, dropout)
-
+        self.decoder = Decoder3d_38(
+            dec_dim,
+            z_dim,
+            dim_mult,
+            num_res_blocks,
+            attn_scales,
+            self.temperal_upsample,
+            dropout,
+        )
 
     def encode(self, x, scale):
         self.clear_cache()
@@ -1303,32 +1556,37 @@ class VideoVAE38_(VideoVAE_):
         for i in range(iter_):
             self._enc_conv_idx = [0]
             if i == 0:
-                out = self.encoder(x[:, :, :1, :, :],
-                                   feat_cache=self._enc_feat_map,
-                                   feat_idx=self._enc_conv_idx)
+                out = self.encoder(
+                    x[:, :, :1, :, :],
+                    feat_cache=self._enc_feat_map,
+                    feat_idx=self._enc_conv_idx,
+                )
             else:
-                out_ = self.encoder(x[:, :, 1 + 4 * (i - 1):1 + 4 * i, :, :],
-                                    feat_cache=self._enc_feat_map,
-                                    feat_idx=self._enc_conv_idx)
+                out_ = self.encoder(
+                    x[:, :, 1 + 4 * (i - 1) : 1 + 4 * i, :, :],
+                    feat_cache=self._enc_feat_map,
+                    feat_idx=self._enc_conv_idx,
+                )
                 out = torch.cat([out, out_], 2)
         mu, log_var = self.conv1(out).chunk(2, dim=1)
         if isinstance(scale[0], torch.Tensor):
             scale = [s.to(dtype=mu.dtype, device=mu.device) for s in scale]
             mu = (mu - scale[0].view(1, self.z_dim, 1, 1, 1)) * scale[1].view(
-                1, self.z_dim, 1, 1, 1)
+                1, self.z_dim, 1, 1, 1
+            )
         else:
             scale = scale.to(dtype=mu.dtype, device=mu.device)
             mu = (mu - scale[0]) * scale[1]
         self.clear_cache()
         return mu
 
-
     def decode(self, z, scale):
         self.clear_cache()
         if isinstance(scale[0], torch.Tensor):
             scale = [s.to(dtype=z.dtype, device=z.device) for s in scale]
             z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(
-                1, self.z_dim, 1, 1, 1)
+                1, self.z_dim, 1, 1, 1
+            )
         else:
             scale = scale.to(dtype=z.dtype, device=z.device)
             z = z / scale[1] + scale[0]
@@ -1337,14 +1595,18 @@ class VideoVAE38_(VideoVAE_):
         for i in range(iter_):
             self._conv_idx = [0]
             if i == 0:
-                out = self.decoder(x[:, :, i:i + 1, :, :],
-                                   feat_cache=self._feat_map,
-                                   feat_idx=self._conv_idx,
-                                   first_chunk=True)
+                out = self.decoder(
+                    x[:, :, i : i + 1, :, :],
+                    feat_cache=self._feat_map,
+                    feat_idx=self._conv_idx,
+                    first_chunk=True,
+                )
             else:
-                out_ = self.decoder(x[:, :, i:i + 1, :, :],
-                                    feat_cache=self._feat_map,
-                                    feat_idx=self._conv_idx)
+                out_ = self.decoder(
+                    x[:, :, i : i + 1, :, :],
+                    feat_cache=self._feat_map,
+                    feat_idx=self._conv_idx,
+                )
                 out = torch.cat([out, out_], 2)
         out = unpatchify(out, patch_size=2)
         self.clear_cache()
@@ -1357,20 +1619,104 @@ class WanVideoVAE38(WanVideoVAE):
         super(WanVideoVAE, self).__init__()
 
         mean = [
-            -0.2289, -0.0052, -0.1323, -0.2339, -0.2799,  0.0174,  0.1838,  0.1557,
-            -0.1382,  0.0542,  0.2813,  0.0891,  0.1570, -0.0098,  0.0375, -0.1825,
-            -0.2246, -0.1207, -0.0698,  0.5109,  0.2665, -0.2108, -0.2158,  0.2502,
-            -0.2055, -0.0322,  0.1109,  0.1567, -0.0729,  0.0899, -0.2799, -0.1230,
-            -0.0313, -0.1649,  0.0117,  0.0723, -0.2839, -0.2083, -0.0520,  0.3748,
-            0.0152,  0.1957,  0.1433, -0.2944,  0.3573, -0.0548, -0.1681, -0.0667
+            -0.2289,
+            -0.0052,
+            -0.1323,
+            -0.2339,
+            -0.2799,
+            0.0174,
+            0.1838,
+            0.1557,
+            -0.1382,
+            0.0542,
+            0.2813,
+            0.0891,
+            0.1570,
+            -0.0098,
+            0.0375,
+            -0.1825,
+            -0.2246,
+            -0.1207,
+            -0.0698,
+            0.5109,
+            0.2665,
+            -0.2108,
+            -0.2158,
+            0.2502,
+            -0.2055,
+            -0.0322,
+            0.1109,
+            0.1567,
+            -0.0729,
+            0.0899,
+            -0.2799,
+            -0.1230,
+            -0.0313,
+            -0.1649,
+            0.0117,
+            0.0723,
+            -0.2839,
+            -0.2083,
+            -0.0520,
+            0.3748,
+            0.0152,
+            0.1957,
+            0.1433,
+            -0.2944,
+            0.3573,
+            -0.0548,
+            -0.1681,
+            -0.0667,
         ]
         std = [
-            0.4765, 1.0364, 0.4514, 1.1677, 0.5313, 0.4990, 0.4818, 0.5013,
-            0.8158, 1.0344, 0.5894, 1.0901, 0.6885, 0.6165, 0.8454, 0.4978,
-            0.5759, 0.3523, 0.7135, 0.6804, 0.5833, 1.4146, 0.8986, 0.5659,
-            0.7069, 0.5338, 0.4889, 0.4917, 0.4069, 0.4999, 0.6866, 0.4093,
-            0.5709, 0.6065, 0.6415, 0.4944, 0.5726, 1.2042, 0.5458, 1.6887,
-            0.3971, 1.0600, 0.3943, 0.5537, 0.5444, 0.4089, 0.7468, 0.7744
+            0.4765,
+            1.0364,
+            0.4514,
+            1.1677,
+            0.5313,
+            0.4990,
+            0.4818,
+            0.5013,
+            0.8158,
+            1.0344,
+            0.5894,
+            1.0901,
+            0.6885,
+            0.6165,
+            0.8454,
+            0.4978,
+            0.5759,
+            0.3523,
+            0.7135,
+            0.6804,
+            0.5833,
+            1.4146,
+            0.8986,
+            0.5659,
+            0.7069,
+            0.5338,
+            0.4889,
+            0.4917,
+            0.4069,
+            0.4999,
+            0.6866,
+            0.4093,
+            0.5709,
+            0.6065,
+            0.6415,
+            0.4944,
+            0.5726,
+            1.2042,
+            0.5458,
+            1.6887,
+            0.3971,
+            1.0600,
+            0.3943,
+            0.5537,
+            0.5444,
+            0.4089,
+            0.7468,
+            0.7744,
         ]
         self.mean = torch.tensor(mean)
         self.std = torch.tensor(std)
@@ -1380,3 +1726,342 @@ class WanVideoVAE38(WanVideoVAE):
         self.model = VideoVAE38_(z_dim=z_dim, dim=dim).eval().requires_grad_(False)
         self.upsampling_factor = 16
         self.z_dim = z_dim
+
+
+def load_decoder_lora(vae_model, decoder_state_dict, alpha=1.0):
+    """
+    Load LoRA weights into VAE decoder.
+    Based on official Wan-Alpha implementation (Wan-Alpha/wan/modules/vae.py:25-71)
+
+    Args:
+        vae_model: The VAE decoder model to apply LoRA to
+        decoder_state_dict: State dict containing lora_A and lora_B weights
+        alpha: LoRA alpha scaling factor (default 1.0)
+
+    Formula: weight_patched = weight_model + (lora_B @ lora_A) / rank
+    """
+
+    def get_name_dict(lora_state_dict):
+        """Parse LoRA state dict to map lora_B → lora_A pairs"""
+        lora_name_dict = {}
+        for key in lora_state_dict:
+            if ".lora_B." not in key:
+                continue
+
+            # Remove .lora_B. and any .default. to get target module name
+            keys = key.split(".")
+            if len(keys) > keys.index("lora_B") + 2:
+                keys.pop(keys.index("lora_B") + 1)
+            keys.pop(keys.index("lora_B"))
+            target_name = ".".join(keys)
+
+            # Map to lora_A key
+            lora_a_key = key.replace(".lora_B.", ".lora_A.")
+            lora_name_dict[target_name] = (key, lora_a_key)
+
+        return lora_name_dict
+
+    lora_name_dict = get_name_dict(decoder_state_dict)
+    state_dict_model = vae_model.state_dict()
+
+    for name in lora_name_dict:
+        # Map .conv3D. to . for actual model keys
+        model_key = name.replace(".conv3D.", ".")
+
+        if model_key not in state_dict_model:
+            continue
+
+        weight_model = state_dict_model[model_key]
+        weight_up = decoder_state_dict[lora_name_dict[name][0]]  # lora_B
+        weight_down = decoder_state_dict[lora_name_dict[name][1]]  # lora_A
+        r = float(weight_up.shape[1])  # LoRA rank
+
+        # Handle different weight tensor shapes
+        if len(weight_up.shape) == 5:  # Conv3D: [out, in, d, h, w]
+            weight_lora = torch.zeros_like(weight_model)
+            weight_up = weight_up.squeeze(4).squeeze(3).squeeze(2)  # [out, r]
+            # Reconstruct 3D conv weights
+            for i in range(weight_down.shape[2]):
+                for j in range(weight_down.shape[3]):
+                    for k in range(weight_down.shape[4]):
+                        weight_lora[:, :, i, j, k] = alpha * torch.mm(
+                            weight_up, weight_down[:, :, i, j, k]
+                        )
+
+        elif len(weight_up.shape) == 4:  # Conv2D: [out, in, h, w]
+            weight_lora = torch.zeros_like(weight_model)
+            weight_up = weight_up.squeeze(3).squeeze(2)  # [out, r]
+            for i in range(weight_down.shape[2]):
+                for j in range(weight_down.shape[3]):
+                    weight_lora[:, :, i, j] = alpha * torch.mm(
+                        weight_up, weight_down[:, :, i, j]
+                    )
+
+        else:  # Linear: [out, in]
+            weight_lora = alpha * torch.mm(weight_up, weight_down)
+
+        # Apply LoRA with rank normalization
+        weight_patched = weight_model + weight_lora / r
+        state_dict_model[model_key] = weight_patched
+
+    vae_model.load_state_dict(state_dict_model)
+    return len(lora_name_dict)  # Return number of layers patched
+
+
+class RGBAlphaVAE(nn.Module):
+    """
+    RGB-Alpha VAE for Wan-Alpha training and inference.
+    Based on official Wan-Alpha implementation (Wan-Alpha/wan/modules/vae.py:674-744)
+
+    Architecture:
+    - Dual decoders: model_fgr (RGB) and model_pha (Alpha)
+    - Both start from same base VAE, different decoder LoRAs applied
+    - Feature merge block for encoding (trainable during Stage 1)
+    - Frozen encoder from base Wan VAE
+    """
+
+    def __init__(
+        self,
+        base_vae_path,
+        vae_lora_path=None,
+        z_dim=16,
+        dtype=torch.bfloat16,
+        device="cuda",
+        with_feature_merge=True,
+    ):
+        """
+        Args:
+            base_vae_path: Path to base Wan2.1_VAE.pth
+            vae_lora_path: Path to decoder.bin (contains vae_fgr and vae_pha LoRAs)
+            z_dim: Latent dimension (16 for Wan VAE)
+            dtype: Data type for computation
+            device: Device for computation
+            with_feature_merge: Whether to include feature merge block
+        """
+        super().__init__()
+        self.dtype = dtype
+        self.device = device
+        self.z_dim = z_dim
+        self.with_feature_merge = with_feature_merge
+
+        # VAE normalization constants (from Wan VAE)
+        mean = [
+            -0.7571,
+            -0.7089,
+            -0.9113,
+            0.1075,
+            -0.1745,
+            0.9653,
+            -0.1517,
+            1.5508,
+            0.4134,
+            -0.0715,
+            0.5517,
+            -0.3632,
+            -0.1922,
+            -0.9497,
+            0.2503,
+            -0.2921,
+        ]
+        std = [
+            2.8184,
+            1.4541,
+            2.3275,
+            2.6558,
+            1.2196,
+            1.7708,
+            2.6052,
+            2.0743,
+            3.2687,
+            2.1526,
+            2.8652,
+            1.5579,
+            1.6382,
+            1.1253,
+            2.8251,
+            1.9160,
+        ]
+        self.mean = torch.tensor(mean, dtype=dtype, device=device)
+        self.std = torch.tensor(std, dtype=dtype, device=device)
+        self.scale = [self.mean, 1.0 / self.std]
+
+        # Load base VAE twice (one for RGB, one for Alpha)
+        from ..models.utils import load_state_dict
+
+        print(f"Loading base VAE from {base_vae_path}")
+        base_state_dict = load_state_dict(base_vae_path)
+
+        # Create RGB decoder (foreground)
+        self.model_fgr = VideoVAE_(z_dim=z_dim).eval().requires_grad_(False).to(device)
+        self.model_fgr.load_state_dict(base_state_dict, strict=False)
+
+        # Create Alpha decoder (copy of base)
+        self.model_pha = VideoVAE_(z_dim=z_dim).eval().requires_grad_(False).to(device)
+        self.model_pha.load_state_dict(base_state_dict, strict=False)
+
+        # Feature merge block (trainable or frozen depending on stage)
+        if with_feature_merge:
+            self.feature_merge = FeatureMergeBlock(input_dim=z_dim, num_res_blocks=3)
+            self.feature_merge.to(device)
+        else:
+            self.feature_merge = None
+
+        # Load decoder LoRAs if provided
+        if vae_lora_path is not None:
+            self.load_decoder_loras(vae_lora_path)
+
+    def load_decoder_loras(self, vae_lora_path):
+        """
+        Load RGB and Alpha decoder LoRAs from decoder.bin
+        Follows official implementation (Wan-Alpha/wan/modules/vae.py:708-721)
+        """
+        print(f"Loading decoder LoRAs from {vae_lora_path}")
+        state_dict = torch.load(vae_lora_path, map_location="cpu")
+
+        # Extract vae_fgr decoder LoRAs (remove "vae_fgr." prefix)
+        vae_fgr_state_dict = {}
+        for key in state_dict:
+            if key[:8] == "vae_fgr." and "decoder" in key:
+                vae_fgr_state_dict[key[8:]] = state_dict[key].data
+
+        # Extract vae_pha decoder LoRAs (remove "vae_pha." prefix)
+        vae_pha_state_dict = {}
+        for key in state_dict:
+            if key[:8] == "vae_pha." and "decoder" in key:
+                vae_pha_state_dict[key[8:]] = state_dict[key].data
+
+        # Apply LoRAs to decoders
+        num_fgr_layers = load_decoder_lora(self.model_fgr, vae_fgr_state_dict)
+        num_pha_layers = load_decoder_lora(self.model_pha, vae_pha_state_dict)
+
+        print(f"✅ RGB decoder LoRA loaded: {num_fgr_layers} layers patched")
+        print(f"✅ Alpha decoder LoRA loaded: {num_pha_layers} layers patched")
+
+    def encode(self, videos, tiled=False, tile_size=(34, 34), tile_stride=(18, 16)):
+        """
+        Encode videos using base VAE encoder.
+
+        Args:
+            videos: List of video tensors [C, T, H, W]
+            tiled: Whether to use tiled encoding
+            tile_size: Tile size for tiled encoding
+            tile_stride: Tile stride for tiled encoding
+
+        Returns:
+            List of latent tensors [C, T, H, W]
+        """
+        # Use the RGB model's encoder (both are identical)
+        if tiled:
+            return self.model_fgr.tiled_encode(
+                videos, self.device, tile_size, tile_stride
+            )
+        else:
+            with torch.amp.autocast(device_type="cuda", dtype=self.dtype):
+                return [
+                    self.model_fgr.encode(v.unsqueeze(0), self.scale).float().squeeze(0)
+                    for v in videos
+                ]
+
+    def encode_with_merge(
+        self,
+        rgb_videos,
+        alpha_videos,
+        tiled=False,
+        tile_size=(34, 34),
+        tile_stride=(18, 16),
+    ):
+        """
+        Encode RGB and alpha videos separately, then merge with feature merge block.
+        This is used during Feature Merge Block training (Stage 1).
+
+        Args:
+            rgb_videos: List of RGB video tensors [3, T, H, W]
+            alpha_videos: List of alpha video tensors [3, T, H, W] (3-channel duplicated)
+            tiled: Whether to use tiled encoding
+            tile_size: Tile size for tiled encoding
+            tile_stride: Tile stride for tiled encoding
+
+        Returns:
+            List of merged latent tensors [C, T, H, W]
+        """
+        if self.feature_merge is None:
+            raise ValueError(
+                "Feature merge block not initialized. Set with_feature_merge=True."
+            )
+
+        # Encode RGB and alpha separately
+        rgb_latents = self.encode(rgb_videos, tiled, tile_size, tile_stride)
+        alpha_latents = self.encode(alpha_videos, tiled, tile_size, tile_stride)
+
+        # Merge features
+        merged_latents = []
+        for rgb_lat, alpha_lat in zip(rgb_latents, alpha_latents):
+            # Add batch dimension for feature merge
+            rgb_lat_batch = rgb_lat.unsqueeze(0)
+            alpha_lat_batch = alpha_lat.unsqueeze(0)
+
+            # Merge and remove batch dimension
+            merged = self.feature_merge(rgb_lat_batch, alpha_lat_batch).squeeze(0)
+            merged_latents.append(merged)
+
+        return merged_latents
+
+    def decode(self, latents, tiled=False, tile_size=(34, 34), tile_stride=(18, 16)):
+        """
+        Decode latents to RGB and Alpha videos using dual decoders.
+        Returns tuple of (rgb_videos, alpha_videos).
+
+        Args:
+            latents: List of latent tensors [C, T, H, W]
+            tiled: Whether to use tiled decoding
+            tile_size: Tile size for tiled decoding
+            tile_stride: Tile stride for tiled decoding
+
+        Returns:
+            tuple: (rgb_videos, alpha_videos) - both as lists of tensors
+        """
+        with torch.amp.autocast(device_type="cuda", dtype=self.dtype):
+            # Decode with RGB decoder
+            if tiled:
+                rgb_videos = self.model_fgr.tiled_decode(
+                    latents, self.device, tile_size, tile_stride
+                )
+            else:
+                rgb_videos = [
+                    self.model_fgr.decode(z.unsqueeze(0), self.scale)
+                    .float()
+                    .clamp_(-1, 1)
+                    .squeeze(0)
+                    for z in latents
+                ]
+
+            # Decode with Alpha decoder
+            if tiled:
+                alpha_videos = self.model_pha.tiled_decode(
+                    latents, self.device, tile_size, tile_stride
+                )
+            else:
+                alpha_videos = [
+                    self.model_pha.decode(z.unsqueeze(0), self.scale)
+                    .float()
+                    .clamp_(-1, 1)
+                    .squeeze(0)
+                    for z in latents
+                ]
+
+        return rgb_videos, alpha_videos
+
+    def freeze_decoders(self):
+        """Freeze both decoders (for Feature Merge Block training)"""
+        self.model_fgr.requires_grad_(False)
+        self.model_pha.requires_grad_(False)
+
+    def freeze_feature_merge(self):
+        """Freeze feature merge block (for DiT training)"""
+        if self.feature_merge is not None:
+            self.feature_merge.requires_grad_(False)
+
+    def unfreeze_feature_merge(self):
+        """Unfreeze feature merge block (for training)"""
+        if self.feature_merge is not None:
+            self.feature_merge.requires_grad_(True)

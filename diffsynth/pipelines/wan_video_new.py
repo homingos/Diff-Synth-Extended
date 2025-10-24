@@ -104,6 +104,110 @@ class WanVideoPipeline(BasePipeline):
         else:
             loader = GeneralLoRALoader(torch_dtype=self.torch_dtype, device=self.device)
             loader.load(module, lora, alpha=alpha)
+    
+    def load_dora(
+        self,
+        module: torch.nn.Module,
+        dora_config: Union[ModelConfig, str] = None,
+        alpha=1.0,
+        state_dict=None,
+    ):
+        """
+        Load DoRA (Weight-Decomposed Low-Rank Adaptation) weights into a module.
+        DoRA includes lora_A, lora_B, and lora_magnitude_vector components.
+        
+        Based on Wan-Alpha implementation: https://arxiv.org/abs/2509.24979
+        
+        Args:
+            module: The model module to load DoRA into (e.g., pipe.dit)
+            dora_config: Path to DoRA checkpoint or ModelConfig object
+            alpha: Scaling factor for DoRA weights
+            state_dict: Optional pre-loaded state dict
+        """
+        # Load state dict
+        if state_dict is None:
+            if isinstance(dora_config, str):
+                dora = load_state_dict(dora_config, torch_dtype=self.torch_dtype, device=self.device)
+            else:
+                dora_config.download_if_necessary()
+                dora = load_state_dict(dora_config.path, torch_dtype=self.torch_dtype, device=self.device)
+        else:
+            dora = state_dict
+        
+        # Process DoRA state dict keys
+        def get_name_dict(dora_state_dict):
+            """Extract DoRA parameter mappings from state dict"""
+            dora_name_dict = {}
+            for key in dora_state_dict:
+                if ".lora_B." not in key:
+                    continue
+                
+                # Parse key to get target module name
+                keys = key.split(".")
+                lora_b_idx = keys.index("lora_B")
+                if len(keys) > lora_b_idx + 2:
+                    keys.pop(lora_b_idx + 1)
+                keys.pop(lora_b_idx)
+                target_name = ".".join(keys)
+                
+                # Store all three DoRA components
+                lora_a_key = key.replace(".lora_B.", ".lora_A.")
+                magnitude_key = key.replace(".lora_B.", ".lora_magnitude_vector.").replace(".weight", ".weight")
+                magnitude_key = magnitude_key.replace("lora_B", "lora_magnitude_vector")
+                
+                dora_name_dict[target_name] = {
+                    "lora_B": key,
+                    "lora_A": lora_a_key,
+                    "magnitude": magnitude_key
+                }
+            return dora_name_dict
+        
+        dora_name_dict = get_name_dict(dora)
+        state_dict_model = module.state_dict()
+        
+        # Apply DoRA weights to model
+        for name in dora_name_dict:
+            if name not in state_dict_model:
+                continue
+            
+            param_info = dora_name_dict[name]
+            weight_b = dora[param_info["lora_B"]]
+            weight_a = dora[param_info["lora_A"]]
+            magnitude = dora.get(param_info["magnitude"], None)
+            
+            # Handle different weight shapes (Conv vs Linear)
+            if len(weight_b.shape) == 4:
+                weight_b = weight_b.squeeze(3).squeeze(2)
+                weight_a = weight_a.squeeze(3).squeeze(2)
+                delta_weight = alpha * torch.mm(weight_b, weight_a)
+                delta_weight = delta_weight.unsqueeze(2).unsqueeze(3)
+            else:
+                delta_weight = alpha * torch.mm(weight_b, weight_a)
+            
+            # Apply DoRA transformation
+            weight_model = state_dict_model[name].clone()
+            weight_with_delta = weight_model + delta_weight
+            
+            # Apply magnitude normalization if magnitude vector exists
+            if magnitude is not None:
+                if len(weight_with_delta.shape) == 4:
+                    norm_dims = tuple(range(1, weight_with_delta.dim()))
+                    weight_norm = torch.linalg.norm(weight_with_delta, dim=norm_dims, keepdim=True)
+                else:
+                    weight_norm = torch.linalg.norm(weight_with_delta, dim=1, keepdim=True)
+                
+                weight_norm = torch.clamp(weight_norm, min=1e-8)
+                magnitude = magnitude.view_as(weight_norm)
+                weight_patched = (magnitude / weight_norm) * weight_with_delta
+            else:
+                # Fallback to standard LoRA if no magnitude vector
+                weight_patched = weight_with_delta
+            
+            state_dict_model[name] = weight_patched
+        
+        # Load the patched weights back into the module
+        module.load_state_dict(state_dict_model, strict=False)
+        print(f"DoRA loaded successfully: {len(dora_name_dict)} layers patched")
         
     def training_loss(self, **inputs):
         max_timestep_boundary = int(inputs.get("max_timestep_boundary", 1) * self.scheduler.num_train_timesteps)
