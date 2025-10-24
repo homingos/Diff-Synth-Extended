@@ -337,15 +337,15 @@ if __name__ == "__main__":
                     )
 
                     # Print detailed metrics every 50 steps
-                    if global_step % 50 == 0:
-                        accelerator.print(
-                            f"\n[Step {global_step}] "
-                            f"Loss: {avg_total:.6f} | "
-                            f"Alpha: {avg_alpha:.6f} | "
-                            f"RGB-Soft: {avg_rgb_soft:.6f} | "
-                            f"RGB-Hard: {avg_rgb_hard:.6f} | "
-                            f"LR: {scheduler.get_last_lr()[0]:.2e}"
-                        )
+                    # if global_step % 50 == 0:
+                    accelerator.print(
+                        f"\n[Step {global_step}] "
+                        f"Loss: {avg_total:.6f} | "
+                        f"Alpha: {avg_alpha:.6f} | "
+                        f"RGB-Soft: {avg_rgb_soft:.6f} | "
+                        f"RGB-Hard: {avg_rgb_hard:.6f} | "
+                        f"LR: {scheduler.get_last_lr()[0]:.2e}"
+                    )
 
                 # Clear CUDA cache to prevent OOM
                 if torch.cuda.is_available():
