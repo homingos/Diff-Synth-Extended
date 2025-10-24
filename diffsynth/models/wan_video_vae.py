@@ -1214,14 +1214,9 @@ class VideoVAE_(nn.Module):
             tile_size: (tile_h, tile_w) spatial tile size
             tile_stride: (stride_h, stride_w) spatial stride
         """
-        from diffsynth.models.tiler import TileWorker
-
         B, C, T, H, W = x.shape
         tile_h, tile_w = tile_size
         stride_h, stride_w = tile_stride
-
-        # Create tiler
-        tiler = TileWorker()
 
         # Encode in tiles
         latent_tiles = []
@@ -1236,6 +1231,9 @@ class VideoVAE_(nn.Module):
                 # Encode tile
                 latent_tile = self.encode(tile, scale)
 
+                # Get actual latent temporal dimension (may differ from input T)
+                latent_T = latent_tile.shape[2]
+
                 latent_tiles.append(
                     {
                         "latent": latent_tile,
@@ -1246,14 +1244,20 @@ class VideoVAE_(nn.Module):
                     }
                 )
 
-        # Reconstruct full latent
+        # Get actual latent dimensions from first tile
+        first_latent = latent_tiles[0]["latent"]
+        latent_T = first_latent.shape[2]
         latent_h = H // 8
         latent_w = W // 8
+
+        # Reconstruct full latent
         full_latent = torch.zeros(
-            (B, self.z_dim, T, latent_h, latent_w), dtype=x.dtype, device=x.device
+            (B, self.z_dim, latent_T, latent_h, latent_w),
+            dtype=x.dtype,
+            device=x.device,
         )
         weight_map = torch.zeros(
-            (B, 1, T, latent_h, latent_w), dtype=x.dtype, device=x.device
+            (B, 1, latent_T, latent_h, latent_w), dtype=x.dtype, device=x.device
         )
 
         for tile_info in latent_tiles:
