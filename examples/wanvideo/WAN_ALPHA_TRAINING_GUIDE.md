@@ -249,6 +249,41 @@ DiffSynth-Studio/
 - Reduce `--num_frames` to 49 or 33 for testing
 - Use smaller resolution (e.g., 480×480)
 
+### Speeding Up Training with Cached Latents
+
+For faster training, pre-cache VAE latents to avoid repeated encoding:
+
+#### Step 1: Cache Latents
+```bash
+python examples/wanvideo/model_training/cache_latents.py \
+    --dataset_base_path data/rgba_videos \
+    --dataset_metadata_path data/rgba_videos/metadata.csv \
+    --base_vae_path /path/to/Wan2.1_VAE.pth \
+    --vae_lora_path /path/to/decoder.bin \
+    --output_dir ./cached_latents \
+    --height 480 --width 832 --num_frames 81
+```
+
+#### Step 2: Train with Cached Latents
+```bash
+accelerate launch examples/wanvideo/model_training/train_feature_merge_cached.py \
+    --base_vae_path /path/to/Wan2.1_VAE.pth \
+    --vae_lora_path /path/to/decoder.bin \
+    --cache_dir ./cached_latents \
+    --batch_size 4 --num_epochs 10 \
+    --output_path ./models/train/feature_merge_cached
+```
+
+Or use the convenience script:
+```bash
+bash examples/wanvideo/model_training/run_cached_training.sh
+```
+
+Benefits:
+- **5-10x faster training** (no VAE encoding per epoch)
+- **Lower GPU memory** (no encoder in memory)
+- **Consistent latents** across epochs
+
 ### Improving Quality
 
 - Train FeatureMergeBlock for more epochs (15-20)
