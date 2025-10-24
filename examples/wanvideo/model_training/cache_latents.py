@@ -96,6 +96,16 @@ class LatentCacher:
             >> SoftRenderRGBA(),  # Apply soft rendering
         )
 
+        # Custom collate function to handle PIL Images
+        def custom_collate(batch):
+            """Custom collate that returns batch as-is without trying to stack PIL Images"""
+            if len(batch) == 1:
+                # For batch_size=1, just return the single item
+                return batch[0]
+            else:
+                # For larger batches, return as list
+                return batch
+
         # Create dataloader
         self.dataloader = DataLoader(
             self.dataset,
@@ -103,6 +113,7 @@ class LatentCacher:
             shuffle=False,  # Keep order for easy indexing
             num_workers=num_workers,
             pin_memory=True,
+            collate_fn=custom_collate,
         )
 
         # Metadata storage
@@ -139,33 +150,21 @@ class LatentCacher:
 
         with torch.no_grad():
             for idx, data in enumerate(tqdm(self.dataloader, desc="Caching latents")):
+                # Debug: print available keys on first iteration
+                if idx == 0:
+                    print(f"Available data keys: {list(data.keys())}")
+
                 # Extract data
-                # For UnifiedDataset, the file path is in the "__key__" field
-                video_path = (
-                    data["__key__"][0]
-                    if "__key__" in data
-                    else data.get("video", ["unknown"])[0]
-                )
-                rgb_video = (
-                    data["rgb_video"][0]
-                    if isinstance(data["rgb_video"], list)
-                    else data["rgb_video"]
-                )
-                alpha_video = (
-                    data["alpha_video"][0]
-                    if isinstance(data["alpha_video"], list)
-                    else data["alpha_video"]
-                )
-                hard_rgb_video = (
-                    data["hard_rgb_video"][0]
-                    if isinstance(data["hard_rgb_video"], list)
-                    else data["hard_rgb_video"]
-                )
-                soft_rgb_video = (
-                    data["soft_rgb_video"][0]
-                    if isinstance(data["soft_rgb_video"], list)
-                    else data["soft_rgb_video"]
-                )
+                # For UnifiedDataset with batch_size=1 and custom collate
+                video_path = data.get("__key__", data.get("video", "unknown"))
+                if isinstance(video_path, list):
+                    video_path = video_path[0]
+
+                # Extract video data - should be lists of PIL Images
+                rgb_video = data["rgb_video"]
+                alpha_video = data["alpha_video"]
+                hard_rgb_video = data["hard_rgb_video"]
+                soft_rgb_video = data["soft_rgb_video"]
 
                 # Convert PIL to tensors
                 rgb_tensor = self.pil_to_tensor(rgb_video)
@@ -206,16 +205,8 @@ class LatentCacher:
                     "alpha_tensor": alpha_tensor.cpu(),
                     "hard_rgb_tensor": hard_rgb_tensor.cpu(),
                     "soft_rgb_tensor": soft_rgb_tensor.cpu(),
-                    "hard_color": (
-                        data["hard_color"][0]
-                        if isinstance(data["hard_color"], list)
-                        else data["hard_color"]
-                    ),
-                    "soft_color": (
-                        data["soft_color"][0]
-                        if isinstance(data["soft_color"], list)
-                        else data["soft_color"]
-                    ),
+                    "hard_color": data["hard_color"],
+                    "soft_color": data["soft_color"],
                     "video_path": video_path,
                     "index": idx,
                 }
