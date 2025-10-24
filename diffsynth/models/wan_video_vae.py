@@ -1205,6 +1205,128 @@ class VideoVAE_(nn.Module):
         std = torch.exp(0.5 * log_var.clamp(-30.0, 20.0))
         return mu + std * torch.randn_like(std)
 
+    def tiled_encode(self, x, scale, tile_size=(34, 34), tile_stride=(18, 16)):
+        """
+        Tiled encoding for memory efficiency
+        Args:
+            x: input video [B, C, T, H, W]
+            scale: normalization scale
+            tile_size: (tile_h, tile_w) spatial tile size
+            tile_stride: (stride_h, stride_w) spatial stride
+        """
+        from diffsynth.models.tiler import TileWorker
+
+        B, C, T, H, W = x.shape
+        tile_h, tile_w = tile_size
+        stride_h, stride_w = tile_stride
+
+        # Create tiler
+        tiler = TileWorker()
+
+        # Encode in tiles
+        latent_tiles = []
+        for h_start in range(0, H, stride_h):
+            for w_start in range(0, W, stride_w):
+                h_end = min(h_start + tile_h, H)
+                w_end = min(w_start + tile_w, W)
+
+                # Extract tile
+                tile = x[:, :, :, h_start:h_end, w_start:w_end]
+
+                # Encode tile
+                latent_tile = self.encode(tile, scale)
+
+                latent_tiles.append(
+                    {
+                        "latent": latent_tile,
+                        "h_start": h_start // 8,  # Latent space is 8x downsampled
+                        "w_start": w_start // 8,
+                        "h_end": h_end // 8,
+                        "w_end": w_end // 8,
+                    }
+                )
+
+        # Reconstruct full latent
+        latent_h = H // 8
+        latent_w = W // 8
+        full_latent = torch.zeros(
+            (B, self.z_dim, T, latent_h, latent_w), dtype=x.dtype, device=x.device
+        )
+        weight_map = torch.zeros(
+            (B, 1, T, latent_h, latent_w), dtype=x.dtype, device=x.device
+        )
+
+        for tile_info in latent_tiles:
+            latent = tile_info["latent"]
+            h_start, w_start = tile_info["h_start"], tile_info["w_start"]
+            h_end, w_end = tile_info["h_end"], tile_info["w_end"]
+
+            full_latent[:, :, :, h_start:h_end, w_start:w_end] += latent
+            weight_map[:, :, :, h_start:h_end, w_start:w_end] += 1.0
+
+        # Average overlapping regions
+        full_latent = full_latent / weight_map.clamp(min=1.0)
+
+        return full_latent
+
+    def tiled_decode(self, z, scale, tile_size=(34, 34), tile_stride=(18, 16)):
+        """
+        Tiled decoding for memory efficiency
+        Args:
+            z: latent video [B, C, T, H, W]
+            scale: normalization scale
+            tile_size: (tile_h, tile_w) spatial tile size IN PIXEL SPACE
+            tile_stride: (stride_h, stride_w) spatial stride IN PIXEL SPACE
+        """
+        B, C, T, H_latent, W_latent = z.shape
+
+        # Convert pixel space tile size to latent space
+        tile_h_latent = tile_size[0] // 8
+        tile_w_latent = tile_size[1] // 8
+        stride_h_latent = tile_stride[0] // 8
+        stride_w_latent = tile_stride[1] // 8
+
+        # Output size in pixel space
+        H_pixel = H_latent * 8
+        W_pixel = W_latent * 8
+
+        # Decode in tiles
+        output = torch.zeros(
+            (B, 3, T, H_pixel, W_pixel), dtype=z.dtype, device=z.device
+        )
+        weight_map = torch.zeros(
+            (B, 1, T, H_pixel, W_pixel), dtype=z.dtype, device=z.device
+        )
+
+        for h_start in range(0, H_latent, stride_h_latent):
+            for w_start in range(0, W_latent, stride_w_latent):
+                h_end = min(h_start + tile_h_latent, H_latent)
+                w_end = min(w_start + tile_w_latent, W_latent)
+
+                # Extract latent tile
+                latent_tile = z[:, :, :, h_start:h_end, w_start:w_end]
+
+                # Decode tile
+                decoded_tile = self.decode(latent_tile, scale)
+
+                # Place in output (with blending)
+                h_start_pixel = h_start * 8
+                w_start_pixel = w_start * 8
+                h_end_pixel = h_end * 8
+                w_end_pixel = w_end * 8
+
+                output[
+                    :, :, :, h_start_pixel:h_end_pixel, w_start_pixel:w_end_pixel
+                ] += decoded_tile
+                weight_map[
+                    :, :, :, h_start_pixel:h_end_pixel, w_start_pixel:w_end_pixel
+                ] += 1.0
+
+        # Average overlapping regions
+        output = output / weight_map.clamp(min=1.0)
+
+        return output
+
     def clear_cache(self):
         self._conv_num = count_conv3d(self.decoder)
         self._conv_idx = [0]
@@ -1958,9 +2080,12 @@ class RGBAlphaVAE(nn.Module):
         """
         # Use the RGB model's encoder (both are identical)
         if tiled:
-            return self.model_fgr.tiled_encode(
-                videos, self.device, tile_size, tile_stride
-            )
+            return [
+                self.model_fgr.tiled_encode(
+                    v.unsqueeze(0), self.scale, tile_size, tile_stride
+                ).squeeze(0)
+                for v in videos
+            ]
         else:
             with torch.amp.autocast(device_type="cuda", dtype=self.dtype):
                 return [
@@ -2029,9 +2154,15 @@ class RGBAlphaVAE(nn.Module):
         with torch.amp.autocast(device_type="cuda", dtype=self.dtype):
             # Decode with RGB decoder
             if tiled:
-                rgb_videos = self.model_fgr.tiled_decode(
-                    latents, self.device, tile_size, tile_stride
-                )
+                rgb_videos = [
+                    self.model_fgr.tiled_decode(
+                        z.unsqueeze(0), self.scale, tile_size, tile_stride
+                    )
+                    .float()
+                    .clamp_(-1, 1)
+                    .squeeze(0)
+                    for z in latents
+                ]
             else:
                 rgb_videos = [
                     self.model_fgr.decode(z.unsqueeze(0), self.scale)
@@ -2043,9 +2174,15 @@ class RGBAlphaVAE(nn.Module):
 
             # Decode with Alpha decoder
             if tiled:
-                alpha_videos = self.model_pha.tiled_decode(
-                    latents, self.device, tile_size, tile_stride
-                )
+                alpha_videos = [
+                    self.model_pha.tiled_decode(
+                        z.unsqueeze(0), self.scale, tile_size, tile_stride
+                    )
+                    .float()
+                    .clamp_(-1, 1)
+                    .squeeze(0)
+                    for z in latents
+                ]
             else:
                 alpha_videos = [
                     self.model_pha.decode(z.unsqueeze(0), self.scale)
