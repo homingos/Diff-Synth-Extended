@@ -117,7 +117,7 @@ class LatentCacher:
             self.dataset,
             batch_size=batch_size,
             shuffle=False,  # Keep order for easy indexing
-            num_workers=0,  # Avoid multiprocessing issues with PIL Images
+            num_workers=num_workers,  # Avoid multiprocessing issues with PIL Images
             pin_memory=True,
             collate_fn=custom_collate,
         )
