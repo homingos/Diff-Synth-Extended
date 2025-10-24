@@ -68,7 +68,7 @@ accelerate launch examples/wanvideo/model_training/train_feature_merge_cached.py
     --batch_size $BATCH_SIZE \
     --num_epochs $NUM_EPOCHS \
     --learning_rate $LEARNING_RATE \
-    --num_workers 4 \
+    --num_workers 16 \
     --output_path $OUTPUT_PATH \
     --save_interval 1
 
