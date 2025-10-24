@@ -107,11 +107,17 @@ class LatentCacher:
                 return batch
 
         # Create dataloader
+        # Note: Using num_workers=0 to avoid issues with PIL Images in multiprocessing
+        if num_workers > 0:
+            print(
+                f"Warning: Overriding num_workers={num_workers} to 0 to avoid PIL Image serialization issues"
+            )
+
         self.dataloader = DataLoader(
             self.dataset,
             batch_size=batch_size,
             shuffle=False,  # Keep order for easy indexing
-            num_workers=num_workers,
+            num_workers=0,  # Avoid multiprocessing issues with PIL Images
             pin_memory=True,
             collate_fn=custom_collate,
         )
@@ -193,8 +199,23 @@ class LatentCacher:
                     self.metadata["latent_shape"] = list(rgb_latents[0].shape)
 
                 # Create output filename based on video path
-                relative_path = os.path.relpath(video_path, self.dataset_base_path)
-                latent_filename = relative_path.replace("/", "_").replace(".mp4", ".pt")
+                if video_path == "unknown" or not video_path:
+                    # Fallback to index-based naming
+                    latent_filename = f"video_{idx:06d}.pt"
+                else:
+                    try:
+                        relative_path = os.path.relpath(
+                            video_path, self.dataset_base_path
+                        )
+                        latent_filename = relative_path.replace("/", "_").replace(
+                            ".mp4", ".pt"
+                        )
+                    except:
+                        # If relpath fails, use basename
+                        latent_filename = os.path.basename(video_path).replace(
+                            ".mp4", ".pt"
+                        )
+
                 latent_path = self.output_dir / latent_filename
 
                 # Save latents and ground truth tensors
