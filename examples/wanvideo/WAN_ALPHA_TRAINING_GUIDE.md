@@ -254,6 +254,7 @@ DiffSynth-Studio/
 For faster training, pre-cache VAE latents to avoid repeated encoding:
 
 #### Step 1: Cache Latents
+
 ```bash
 python examples/wanvideo/model_training/cache_latents.py \
     --dataset_base_path data/rgba_videos \
@@ -265,6 +266,7 @@ python examples/wanvideo/model_training/cache_latents.py \
 ```
 
 #### Step 2: Train with Cached Latents
+
 ```bash
 accelerate launch examples/wanvideo/model_training/train_feature_merge_cached.py \
     --base_vae_path /path/to/Wan2.1_VAE.pth \
@@ -275,11 +277,13 @@ accelerate launch examples/wanvideo/model_training/train_feature_merge_cached.py
 ```
 
 Or use the convenience script:
+
 ```bash
 bash examples/wanvideo/model_training/run_cached_training.sh
 ```
 
 Benefits:
+
 - **5-10x faster training** (no VAE encoding per epoch)
 - **Lower GPU memory** (no encoder in memory)
 - **Consistent latents** across epochs

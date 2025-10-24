@@ -1130,33 +1130,50 @@ class VideoVAE_(nn.Module):
             dropout,
         )
 
-    def forward(self, x):
-        mu, log_var = self.encode(x)
-        z = self.reparameterize(mu, log_var)
-        x_recon = self.decode(z)
-        return x_recon, mu, log_var
+    def forward(self, x, scale=None):
+        if scale is None:
+            raise ValueError("Scale parameter is required for encode/decode")
+        mu = self.encode(x, scale, use_cache=False)
+        # Note: This forward method only returns mu (mean) for compatibility
+        # For full VAE training with KL loss, use encode() to get mu and log_var
+        x_recon = self.decode(mu, scale, use_cache=False)
+        return x_recon, mu, None
 
-    def encode(self, x, scale):
-        self.clear_cache()
-        ## cache
-        t = x.shape[2]
-        iter_ = 1 + (t - 1) // 4
+    def encode(self, x, scale, use_cache=False):
+        """
+        Encode video to latent.
 
-        for i in range(iter_):
-            self._enc_conv_idx = [0]
-            if i == 0:
-                out = self.encoder(
-                    x[:, :, :1, :, :],
-                    feat_cache=self._enc_feat_map,
-                    feat_idx=self._enc_conv_idx,
-                )
-            else:
-                out_ = self.encoder(
-                    x[:, :, 1 + 4 * (i - 1) : 1 + 4 * i, :, :],
-                    feat_cache=self._enc_feat_map,
-                    feat_idx=self._enc_conv_idx,
-                )
-                out = torch.cat([out, out_], 2)
+        Args:
+            x: Video tensor [B, C, T, H, W]
+            scale: Normalization scale
+            use_cache: If True, use chunked encoding with caching (for streaming)
+                      If False, encode all frames at once (for training/inference)
+        """
+        if use_cache:
+            # Original chunked encoding with caching (for streaming)
+            self.clear_cache()
+            t = x.shape[2]
+            iter_ = 1 + (t - 1) // 4
+
+            for i in range(iter_):
+                self._enc_conv_idx = [0]
+                if i == 0:
+                    out = self.encoder(
+                        x[:, :, :1, :, :],
+                        feat_cache=self._enc_feat_map,
+                        feat_idx=self._enc_conv_idx,
+                    )
+                else:
+                    out_ = self.encoder(
+                        x[:, :, 1 + 4 * (i - 1) : 1 + 4 * i, :, :],
+                        feat_cache=self._enc_feat_map,
+                        feat_idx=self._enc_conv_idx,
+                    )
+                    out = torch.cat([out, out_], 2)
+        else:
+            # Batch encoding without caching (for training/regular inference)
+            out = self.encoder(x, feat_cache=None, feat_idx=None)
+
         mu, log_var = self.conv1(out).chunk(2, dim=1)
         if isinstance(scale[0], torch.Tensor):
             scale = [s.to(dtype=mu.dtype, device=mu.device) for s in scale]
@@ -1168,9 +1185,17 @@ class VideoVAE_(nn.Module):
             mu = (mu - scale[0]) * scale[1]
         return mu
 
-    def decode(self, z, scale):
-        self.clear_cache()
-        # z: [b,c,t,h,w]
+    def decode(self, z, scale, use_cache=False):
+        """
+        Decode latent to video.
+
+        Args:
+            z: Latent tensor [B, C, T, H, W]
+            scale: Normalization scale
+            use_cache: If True, use frame-by-frame decoding with caching (for streaming)
+                      If False, decode all frames at once (for training/inference)
+        """
+        # Denormalize
         if isinstance(scale[0], torch.Tensor):
             scale = [s.to(dtype=z.dtype, device=z.device) for s in scale]
             z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(
@@ -1179,24 +1204,33 @@ class VideoVAE_(nn.Module):
         else:
             scale = scale.to(dtype=z.dtype, device=z.device)
             z = z / scale[1] + scale[0]
-        iter_ = z.shape[2]
+
         x = self.conv2(z)
-        for i in range(iter_):
-            self._conv_idx = [0]
-            if i == 0:
-                out = self.decoder(
-                    x[:, :, i : i + 1, :, :],
-                    feat_cache=self._feat_map,
-                    feat_idx=self._conv_idx,
-                )
-            else:
-                out_ = self.decoder(
-                    x[:, :, i : i + 1, :, :],
-                    feat_cache=self._feat_map,
-                    feat_idx=self._conv_idx,
-                )
-                out = torch.cat([out, out_], 2)  # may add tensor offload
-        return out
+
+        if use_cache:
+            # Original frame-by-frame decoding with caching (for streaming)
+            self.clear_cache()
+            iter_ = z.shape[2]
+            for i in range(iter_):
+                self._conv_idx = [0]
+                if i == 0:
+                    out = self.decoder(
+                        x[:, :, i : i + 1, :, :],
+                        feat_cache=self._feat_map,
+                        feat_idx=self._conv_idx,
+                    )
+                else:
+                    out_ = self.decoder(
+                        x[:, :, i : i + 1, :, :],
+                        feat_cache=self._feat_map,
+                        feat_idx=self._conv_idx,
+                    )
+                    out = torch.cat([out, out_], 2)
+            return out
+        else:
+            # Batch decoding without caching (for training/regular inference)
+            # Much more memory efficient for non-streaming use cases
+            return self.decoder(x, feat_cache=None, feat_idx=None)
 
     def reparameterize(self, mu, log_var):
         std = torch.exp(0.5 * log_var)
@@ -1234,7 +1268,7 @@ class VideoVAE_(nn.Module):
                 tile = x[:, :, :, h_start:h_end, w_start:w_end]
 
                 # Encode tile
-                latent_tile = self.encode(tile, scale)
+                latent_tile = self.encode(tile, scale, use_cache=False)
 
                 # Get actual latent temporal dimension (may differ from input T)
                 latent_T = latent_tile.shape[2]
@@ -1314,7 +1348,7 @@ class VideoVAE_(nn.Module):
         test_h = min(4, H_latent)
         test_w = min(4, W_latent)
         test_tile = z[:, :, :, :test_h, :test_w]
-        test_decoded = self.decode(test_tile, scale)
+        test_decoded = self.decode(test_tile, scale, use_cache=False)
         T_pixel = test_decoded.shape[2]
 
         # Decode in tiles
@@ -1334,7 +1368,7 @@ class VideoVAE_(nn.Module):
                 latent_tile = z[:, :, :, h_start:h_end, w_start:w_end]
 
                 # Decode tile
-                decoded_tile = self.decode(latent_tile, scale)
+                decoded_tile = self.decode(latent_tile, scale, use_cache=False)
 
                 # Place in output (with blending)
                 h_start_pixel = h_start * 8
@@ -1471,9 +1505,9 @@ class WanVideoVAE(nn.Module):
             hidden_states_batch = hidden_states[:, :, :, h:h_, w:w_].to(
                 computation_device
             )
-            hidden_states_batch = self.model.decode(hidden_states_batch, self.scale).to(
-                data_device
-            )
+            hidden_states_batch = self.model.decode(
+                hidden_states_batch, self.scale, use_cache=False
+            ).to(data_device)
 
             mask = self.build_mask(
                 hidden_states_batch,
@@ -1545,9 +1579,9 @@ class WanVideoVAE(nn.Module):
 
         for h, h_, w, w_ in tqdm(tasks, desc="VAE encoding"):
             hidden_states_batch = video[:, :, :, h:h_, w:w_].to(computation_device)
-            hidden_states_batch = self.model.encode(hidden_states_batch, self.scale).to(
-                data_device
-            )
+            hidden_states_batch = self.model.encode(
+                hidden_states_batch, self.scale, use_cache=False
+            ).to(data_device)
 
             mask = self.build_mask(
                 hidden_states_batch,
@@ -1581,12 +1615,12 @@ class WanVideoVAE(nn.Module):
 
     def single_encode(self, video, device):
         video = video.to(device)
-        x = self.model.encode(video, self.scale)
+        x = self.model.encode(video, self.scale, use_cache=False)
         return x
 
     def single_decode(self, hidden_state, device):
         hidden_state = hidden_state.to(device)
-        video = self.model.decode(hidden_state, self.scale)
+        video = self.model.decode(hidden_state, self.scale, use_cache=False)
         return video.clamp_(-1, 1)
 
     def encode(
@@ -1697,26 +1731,34 @@ class VideoVAE38_(VideoVAE_):
             dropout,
         )
 
-    def encode(self, x, scale):
-        self.clear_cache()
+    def encode(self, x, scale, use_cache=False):
         x = patchify(x, patch_size=2)
-        t = x.shape[2]
-        iter_ = 1 + (t - 1) // 4
-        for i in range(iter_):
-            self._enc_conv_idx = [0]
-            if i == 0:
-                out = self.encoder(
-                    x[:, :, :1, :, :],
-                    feat_cache=self._enc_feat_map,
-                    feat_idx=self._enc_conv_idx,
-                )
-            else:
-                out_ = self.encoder(
-                    x[:, :, 1 + 4 * (i - 1) : 1 + 4 * i, :, :],
-                    feat_cache=self._enc_feat_map,
-                    feat_idx=self._enc_conv_idx,
-                )
-                out = torch.cat([out, out_], 2)
+
+        if use_cache:
+            # Original chunked encoding with caching
+            self.clear_cache()
+            t = x.shape[2]
+            iter_ = 1 + (t - 1) // 4
+            for i in range(iter_):
+                self._enc_conv_idx = [0]
+                if i == 0:
+                    out = self.encoder(
+                        x[:, :, :1, :, :],
+                        feat_cache=self._enc_feat_map,
+                        feat_idx=self._enc_conv_idx,
+                    )
+                else:
+                    out_ = self.encoder(
+                        x[:, :, 1 + 4 * (i - 1) : 1 + 4 * i, :, :],
+                        feat_cache=self._enc_feat_map,
+                        feat_idx=self._enc_conv_idx,
+                    )
+                    out = torch.cat([out, out_], 2)
+            self.clear_cache()
+        else:
+            # Batch encoding without caching
+            out = self.encoder(x, feat_cache=None, feat_idx=None)
+
         mu, log_var = self.conv1(out).chunk(2, dim=1)
         if isinstance(scale[0], torch.Tensor):
             scale = [s.to(dtype=mu.dtype, device=mu.device) for s in scale]
@@ -1726,11 +1768,10 @@ class VideoVAE38_(VideoVAE_):
         else:
             scale = scale.to(dtype=mu.dtype, device=mu.device)
             mu = (mu - scale[0]) * scale[1]
-        self.clear_cache()
         return mu
 
-    def decode(self, z, scale):
-        self.clear_cache()
+    def decode(self, z, scale, use_cache=False):
+        # Denormalize
         if isinstance(scale[0], torch.Tensor):
             scale = [s.to(dtype=z.dtype, device=z.device) for s in scale]
             z = z / scale[1].view(1, self.z_dim, 1, 1, 1) + scale[0].view(
@@ -1739,26 +1780,35 @@ class VideoVAE38_(VideoVAE_):
         else:
             scale = scale.to(dtype=z.dtype, device=z.device)
             z = z / scale[1] + scale[0]
-        iter_ = z.shape[2]
+
         x = self.conv2(z)
-        for i in range(iter_):
-            self._conv_idx = [0]
-            if i == 0:
-                out = self.decoder(
-                    x[:, :, i : i + 1, :, :],
-                    feat_cache=self._feat_map,
-                    feat_idx=self._conv_idx,
-                    first_chunk=True,
-                )
-            else:
-                out_ = self.decoder(
-                    x[:, :, i : i + 1, :, :],
-                    feat_cache=self._feat_map,
-                    feat_idx=self._conv_idx,
-                )
-                out = torch.cat([out, out_], 2)
+
+        if use_cache:
+            # Original frame-by-frame decoding with caching
+            self.clear_cache()
+            iter_ = z.shape[2]
+            for i in range(iter_):
+                self._conv_idx = [0]
+                if i == 0:
+                    out = self.decoder(
+                        x[:, :, i : i + 1, :, :],
+                        feat_cache=self._feat_map,
+                        feat_idx=self._conv_idx,
+                        first_chunk=True,
+                    )
+                else:
+                    out_ = self.decoder(
+                        x[:, :, i : i + 1, :, :],
+                        feat_cache=self._feat_map,
+                        feat_idx=self._conv_idx,
+                    )
+                    out = torch.cat([out, out_], 2)
+            self.clear_cache()
+        else:
+            # Batch decoding without caching
+            out = self.decoder(x, feat_cache=None, feat_idx=None, first_chunk=False)
+
         out = unpatchify(out, patch_size=2)
-        self.clear_cache()
         return out
 
 
@@ -2116,7 +2166,9 @@ class RGBAlphaVAE(nn.Module):
         else:
             with torch.amp.autocast(device_type="cuda", dtype=self.dtype):
                 return [
-                    self.model_fgr.encode(v.unsqueeze(0), self.scale).float().squeeze(0)
+                    self.model_fgr.encode(v.unsqueeze(0), self.scale, use_cache=False)
+                    .float()
+                    .squeeze(0)
                     for v in videos
                 ]
 
@@ -2192,7 +2244,7 @@ class RGBAlphaVAE(nn.Module):
                 ]
             else:
                 rgb_videos = [
-                    self.model_fgr.decode(z.unsqueeze(0), self.scale)
+                    self.model_fgr.decode(z.unsqueeze(0), self.scale, use_cache=False)
                     .float()
                     .clamp_(-1, 1)
                     .squeeze(0)
@@ -2212,7 +2264,7 @@ class RGBAlphaVAE(nn.Module):
                 ]
             else:
                 alpha_videos = [
-                    self.model_pha.decode(z.unsqueeze(0), self.scale)
+                    self.model_pha.decode(z.unsqueeze(0), self.scale, use_cache=False)
                     .float()
                     .clamp_(-1, 1)
                     .squeeze(0)
