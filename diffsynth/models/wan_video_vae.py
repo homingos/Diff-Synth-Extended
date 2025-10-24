@@ -1234,13 +1234,23 @@ class VideoVAE_(nn.Module):
                 # Get actual latent temporal dimension (may differ from input T)
                 latent_T = latent_tile.shape[2]
 
+                # Calculate actual latent dimensions based on encoded tile
+                latent_h_size = latent_tile.shape[3]
+                latent_w_size = latent_tile.shape[4]
+
+                # Calculate latent space positions
+                latent_h_start = h_start // 8
+                latent_w_start = w_start // 8
+                latent_h_end = latent_h_start + latent_h_size
+                latent_w_end = latent_w_start + latent_w_size
+
                 latent_tiles.append(
                     {
                         "latent": latent_tile,
-                        "h_start": h_start // 8,  # Latent space is 8x downsampled
-                        "w_start": w_start // 8,
-                        "h_end": h_end // 8,
-                        "w_end": w_end // 8,
+                        "h_start": latent_h_start,
+                        "w_start": latent_w_start,
+                        "h_end": latent_h_end,
+                        "w_end": latent_w_end,
                     }
                 )
 
