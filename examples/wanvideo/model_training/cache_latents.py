@@ -162,9 +162,20 @@ class LatentCacher:
 
                 # Extract data
                 # For UnifiedDataset with batch_size=1 and custom collate
-                video_path = data.get("__key__", data.get("video", "unknown"))
-                if isinstance(video_path, list):
-                    video_path = video_path[0]
+                # The 'video' field contains the numeric ID from metadata.csv
+                video_id = data.get("video", idx)
+                if isinstance(video_id, list):
+                    video_id = video_id[0]
+
+                # Convert numeric ID to string with zero padding (e.g., 1 -> "001")
+                if isinstance(video_id, int):
+                    video_id_str = f"{video_id:03d}"
+                else:
+                    video_id_str = str(video_id).zfill(3)
+
+                # Construct the actual file paths
+                rgb_path = f"{video_id_str}_rgb.mp4"
+                alpha_path = f"{video_id_str}_alpha.mp4"
 
                 # Extract video data - should be lists of PIL Images
                 rgb_video = data["rgb_video"]
@@ -198,24 +209,8 @@ class LatentCacher:
                 if self.metadata["latent_shape"] is None:
                     self.metadata["latent_shape"] = list(rgb_latents[0].shape)
 
-                # Create output filename based on video path
-                if video_path == "unknown" or not video_path:
-                    # Fallback to index-based naming
-                    latent_filename = f"video_{idx:06d}.pt"
-                else:
-                    try:
-                        relative_path = os.path.relpath(
-                            video_path, self.dataset_base_path
-                        )
-                        latent_filename = relative_path.replace("/", "_").replace(
-                            ".mp4", ".pt"
-                        )
-                    except:
-                        # If relpath fails, use basename
-                        latent_filename = os.path.basename(video_path).replace(
-                            ".mp4", ".pt"
-                        )
-
+                # Create output filename based on video ID
+                latent_filename = f"{video_id_str}.pt"
                 latent_path = self.output_dir / latent_filename
 
                 # Save latents and ground truth tensors
@@ -228,7 +223,10 @@ class LatentCacher:
                     "soft_rgb_tensor": soft_rgb_tensor.cpu(),
                     "hard_color": data["hard_color"],
                     "soft_color": data["soft_color"],
-                    "video_path": video_path,
+                    "video_id": video_id,
+                    "video_id_str": video_id_str,
+                    "rgb_path": rgb_path,
+                    "alpha_path": alpha_path,
                     "index": idx,
                 }
 
@@ -238,9 +236,12 @@ class LatentCacher:
                 self.metadata["video_metadata"].append(
                     {
                         "index": idx,
-                        "video_path": video_path,
+                        "video_id": video_id,
+                        "video_id_str": video_id_str,
+                        "rgb_path": rgb_path,
+                        "alpha_path": alpha_path,
                         "latent_path": str(latent_path),
-                        "relative_path": relative_path,
+                        "latent_filename": latent_filename,
                     }
                 )
 

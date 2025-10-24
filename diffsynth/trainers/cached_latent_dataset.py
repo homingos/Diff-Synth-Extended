@@ -81,7 +81,8 @@ class CachedLatentDataset(Dataset):
         # Prepare output dictionary
         output = {
             "index": idx,
-            "video_path": latent_data["video_path"],
+            "video_id": latent_data.get("video_id", idx),
+            "video_id_str": latent_data.get("video_id_str", f"{idx:03d}"),
             "hard_color": latent_data["hard_color"],
             "soft_color": latent_data["soft_color"],
         }
@@ -109,7 +110,8 @@ class CachedLatentDataset(Dataset):
             "indices": torch.tensor(indices),
             "hard_colors": [d["hard_color"] for d in batch_data],
             "soft_colors": [d["soft_color"] for d in batch_data],
-            "video_paths": [d["video_path"] for d in batch_data],
+            "video_ids": [d["video_id"] for d in batch_data],
+            "video_id_strs": [d["video_id_str"] for d in batch_data],
         }
 
         if self.load_latents:
