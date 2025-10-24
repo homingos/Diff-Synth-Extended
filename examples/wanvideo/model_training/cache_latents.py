@@ -22,7 +22,14 @@ sys.path.append(
 )
 
 from diffsynth.models.wan_video_vae import RGBAlphaVAE
-from diffsynth.trainers.unified_dataset import UnifiedRGBADataset
+from diffsynth.trainers.unified_dataset import (
+    UnifiedDataset,
+    LoadRGBAVideoPair,
+    HardRenderRGBA,
+    SoftRenderRGBA,
+    ImageCropAndResize,
+    ToAbsolutePath,
+)
 
 
 class LatentCacher:
@@ -75,14 +82,18 @@ class LatentCacher:
 
         # Load dataset
         print("Loading dataset...")
-        self.dataset = UnifiedRGBADataset(
+        self.dataset = UnifiedDataset(
             base_path=dataset_base_path,
             metadata_path=dataset_metadata_path,
-            height=height,
-            width=width,
-            num_frames=num_frames,
-            phase="train",
-            deterministic=True,  # Ensure reproducibility
+            repeat=1,
+            data_file_keys=["video"],
+            main_data_operator=ToAbsolutePath(dataset_base_path)
+            >> LoadRGBAVideoPair(
+                num_frames=num_frames,
+                frame_processor=ImageCropAndResize(height, width, None, 16, 16),
+            )
+            >> HardRenderRGBA()  # Apply hard rendering
+            >> SoftRenderRGBA(),  # Apply soft rendering
         )
 
         # Create dataloader
@@ -129,11 +140,32 @@ class LatentCacher:
         with torch.no_grad():
             for idx, data in enumerate(tqdm(self.dataloader, desc="Caching latents")):
                 # Extract data
-                video_path = data["video_path"][0]  # Batch size 1
-                rgb_video = data["rgb_video"]
-                alpha_video = data["alpha_video"]
-                hard_rgb_video = data["hard_rgb_video"]
-                soft_rgb_video = data["soft_rgb_video"]
+                # For UnifiedDataset, the file path is in the "__key__" field
+                video_path = (
+                    data["__key__"][0]
+                    if "__key__" in data
+                    else data.get("video", ["unknown"])[0]
+                )
+                rgb_video = (
+                    data["rgb_video"][0]
+                    if isinstance(data["rgb_video"], list)
+                    else data["rgb_video"]
+                )
+                alpha_video = (
+                    data["alpha_video"][0]
+                    if isinstance(data["alpha_video"], list)
+                    else data["alpha_video"]
+                )
+                hard_rgb_video = (
+                    data["hard_rgb_video"][0]
+                    if isinstance(data["hard_rgb_video"], list)
+                    else data["hard_rgb_video"]
+                )
+                soft_rgb_video = (
+                    data["soft_rgb_video"][0]
+                    if isinstance(data["soft_rgb_video"], list)
+                    else data["soft_rgb_video"]
+                )
 
                 # Convert PIL to tensors
                 rgb_tensor = self.pil_to_tensor(rgb_video)
@@ -174,8 +206,16 @@ class LatentCacher:
                     "alpha_tensor": alpha_tensor.cpu(),
                     "hard_rgb_tensor": hard_rgb_tensor.cpu(),
                     "soft_rgb_tensor": soft_rgb_tensor.cpu(),
-                    "hard_color": data["hard_color"],
-                    "soft_color": data["soft_color"],
+                    "hard_color": (
+                        data["hard_color"][0]
+                        if isinstance(data["hard_color"], list)
+                        else data["hard_color"]
+                    ),
+                    "soft_color": (
+                        data["soft_color"][0]
+                        if isinstance(data["soft_color"], list)
+                        else data["soft_color"]
+                    ),
                     "video_path": video_path,
                     "index": idx,
                 }
