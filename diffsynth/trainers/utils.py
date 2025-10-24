@@ -951,6 +951,42 @@ def wan_parser():
     parser.add_argument(
         "--weight_decay", type=float, default=0.01, help="Weight decay."
     )
+    # RGBA-specific arguments for Wan-Alpha training
+    parser.add_argument(
+        "--rgba_mode", action="store_true", help="Enable RGBA training mode (Wan-Alpha)"
+    )
+    parser.add_argument(
+        "--base_vae_path",
+        type=str,
+        default=None,
+        help="Path to base Wan2.1_VAE.pth for RGBA mode",
+    )
+    parser.add_argument(
+        "--vae_lora_path",
+        type=str,
+        default=None,
+        help="Path to decoder.bin (VAE LoRAs) for RGBA mode",
+    )
+    parser.add_argument(
+        "--feature_merge_checkpoint",
+        type=str,
+        default=None,
+        help="Path to trained FeatureMergeBlock checkpoint",
+    )
+    parser.add_argument(
+        "--use_dora",
+        action="store_true",
+        help="Use DoRA instead of LoRA for DiT training",
+    )
+    parser.add_argument(
+        "--dora_rank", type=int, default=32, help="DoRA rank (default 32)"
+    )
+    parser.add_argument(
+        "--dora_checkpoint",
+        type=str,
+        default=None,
+        help="Path to DoRA checkpoint to resume training",
+    )
     return parser
 
 

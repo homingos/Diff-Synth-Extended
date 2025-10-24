@@ -39,6 +39,9 @@ class FeatureMergeTrainingModule(torch.nn.Module):
     ):
         super().__init__()
 
+        # Store device
+        self.device = device
+
         # Load RGBA VAE with feature merge block
         self.rgba_vae = RGBAlphaVAE(
             base_vae_path=base_vae_path,
@@ -79,7 +82,7 @@ class FeatureMergeTrainingModule(torch.nn.Module):
         hard_rgb_video = data["hard_rgb_video"]  # List of PIL Images
         soft_rgb_video = data["soft_rgb_video"]  # List of PIL Images
 
-        # Convert PIL to tensors [B, C, T, H, W]
+        # Convert PIL to tensors [C, T, H, W]
         rgb_tensor = self.pil_to_tensor(rgb_video)
         alpha_tensor = self.pil_to_tensor(alpha_video)
         hard_rgb_tensor = self.pil_to_tensor(hard_rgb_video)
@@ -96,8 +99,15 @@ class FeatureMergeTrainingModule(torch.nn.Module):
             merged_latents, tiled=False
         )
 
-        pred_rgb = pred_rgb_list[0]
-        pred_alpha = pred_alpha_list[0]
+        # Add batch dimension for loss calculation [1, C, T, H, W]
+        pred_rgb = pred_rgb_list[0].unsqueeze(0)
+        pred_alpha = pred_alpha_list[0].unsqueeze(0)
+
+        # Add batch dimension to ground truth tensors too
+        rgb_tensor = rgb_tensor.unsqueeze(0)
+        alpha_tensor = alpha_tensor.unsqueeze(0)
+        hard_rgb_tensor = hard_rgb_tensor.unsqueeze(0)
+        soft_rgb_tensor = soft_rgb_tensor.unsqueeze(0)
 
         # Apply soft and hard rendering to predicted RGB for loss calculation
         # For soft rendering loss
@@ -119,14 +129,15 @@ class FeatureMergeTrainingModule(torch.nn.Module):
         return total_loss, loss_dict
 
     def pil_to_tensor(self, pil_images):
-        """Convert list of PIL images to tensor [B, C, T, H, W] in range [-1, 1]"""
+        """Convert list of PIL images to tensor [C, T, H, W] in range [-1, 1]"""
         import torchvision.transforms as transforms
 
         to_tensor = transforms.ToTensor()
         tensors = [to_tensor(img) for img in pil_images]
         video_tensor = torch.stack(tensors, dim=1)  # [C, T, H, W]
-        video_tensor = video_tensor.unsqueeze(0)  # [1, C, T, H, W]
         video_tensor = video_tensor * 2.0 - 1.0  # Normalize to [-1, 1]
+        # Move to device
+        video_tensor = video_tensor.to(self.device)
         return video_tensor
 
     def apply_soft_render(self, rgb, alpha, color):
@@ -215,6 +226,16 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # Auto-detect device
+    if torch.cuda.is_available():
+        device = "cuda"
+    elif torch.backends.mps.is_available():
+        device = "mps"
+        print("⚠️  Using MPS (Apple Silicon). Training will be slower than CUDA.")
+    else:
+        device = "cpu"
+        print("⚠️  Using CPU. Training will be very slow!")
+
     # Create dataset
     dataset = UnifiedDataset(
         base_path=args.dataset_base_path,
@@ -227,14 +248,14 @@ if __name__ == "__main__":
             frame_processor=ImageCropAndResize(args.height, args.width, None, 16, 16),
         )
         >> HardRenderRGBA()  # Apply hard rendering
-        >> SoftRenderRGBA(),  # Apply soft rendering
+        >> SoftRenderRGBA(),  # Apply soft rendering (adds soft_rgb_video)
     )
 
     # Create training module
     model = FeatureMergeTrainingModule(
         base_vae_path=args.base_vae_path,
         vae_lora_path=args.vae_lora_path,
-        device="cuda",
+        device=device,
         dtype=torch.bfloat16,
     )
 

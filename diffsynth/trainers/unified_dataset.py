@@ -234,7 +234,15 @@ class ToAbsolutePath(DataProcessingOperator):
         self.base_path = base_path
 
     def __call__(self, data):
-        return os.path.join(self.base_path, data)
+        # Convert to string if needed (handles both str and int from CSV)
+        if isinstance(data, int):
+            # If integer, pad with zeros to match file naming (e.g., 1 → "001")
+            data_str = f"{data:03d}"
+        elif isinstance(data, str):
+            data_str = data
+        else:
+            data_str = str(data)
+        return os.path.join(self.base_path, data_str)
 
 
 class LoadAudio(DataProcessingOperator):
@@ -664,9 +672,15 @@ class UnifiedDataset(torch.utils.data.Dataset):
             for key in self.data_file_keys:
                 if key in data:
                     if key in self.special_operator_map:
-                        data[key] = self.special_operator_map[key](data[key])
+                        result = self.special_operator_map[key](data[key])
                     elif key in self.data_file_keys:
-                        data[key] = self.main_data_operator(data[key])
+                        result = self.main_data_operator(data[key])
+
+                    # If operator returns a dict, merge it with data
+                    if isinstance(result, dict):
+                        data.update(result)
+                    else:
+                        data[key] = result
         return data
 
     def __len__(self):

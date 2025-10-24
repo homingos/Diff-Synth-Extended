@@ -31,7 +31,14 @@ class RGBAReconstructionLoss(nn.Module):
         self.edge_weight = edge_weight
 
         # VGG network for perceptual loss (Equation 8)
-        self.vgg = torchvision.models.vgg16(pretrained=True).features[:16].eval()
+        # Use weights parameter instead of deprecated pretrained
+        from torchvision.models import VGG16_Weights
+
+        self.vgg = (
+            torchvision.models.vgg16(weights=VGG16_Weights.IMAGENET1K_V1)
+            .features[:16]
+            .eval()
+        )
         for param in self.vgg.parameters():
             param.requires_grad = False
 

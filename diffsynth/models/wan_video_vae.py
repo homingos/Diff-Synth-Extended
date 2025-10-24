@@ -1839,6 +1839,12 @@ class RGBAlphaVAE(nn.Module):
             with_feature_merge: Whether to include feature merge block
         """
         super().__init__()
+
+        # Handle device compatibility (MPS/CPU/CUDA)
+        if device == "cuda" and not torch.cuda.is_available():
+            device = "mps" if torch.backends.mps.is_available() else "cpu"
+            print(f"⚠️  CUDA not available, using {device}")
+
         self.dtype = dtype
         self.device = device
         self.z_dim = z_dim
@@ -1881,8 +1887,8 @@ class RGBAlphaVAE(nn.Module):
             2.8251,
             1.9160,
         ]
-        self.mean = torch.tensor(mean, dtype=dtype, device=device)
-        self.std = torch.tensor(std, dtype=dtype, device=device)
+        self.mean = torch.tensor(mean, dtype=dtype, device=self.device)
+        self.std = torch.tensor(std, dtype=dtype, device=self.device)
         self.scale = [self.mean, 1.0 / self.std]
 
         # Load base VAE twice (one for RGB, one for Alpha)
