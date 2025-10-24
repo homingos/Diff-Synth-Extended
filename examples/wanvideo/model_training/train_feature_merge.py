@@ -88,15 +88,20 @@ class FeatureMergeTrainingModule(torch.nn.Module):
         hard_rgb_tensor = self.pil_to_tensor(hard_rgb_video)
         soft_rgb_tensor = self.pil_to_tensor(soft_rgb_video)
 
-        # Encode with feature merging
+        # Encode with feature merging (ENABLE TILING to reduce memory)
         # hard_rgb is used for encoding to prevent color/transparency confusion
+        # Use smaller tiles for spatial dimension, larger for temporal
         merged_latents = self.rgba_vae.encode_with_merge(
-            [hard_rgb_tensor], [alpha_tensor], tiled=False
+            [hard_rgb_tensor],
+            [alpha_tensor],
+            tiled=True,
+            tile_size=(34, 34),
+            tile_stride=(18, 16),
         )
 
-        # Decode with dual decoders
+        # Decode with dual decoders (ENABLE TILING to reduce memory)
         pred_rgb_list, pred_alpha_list = self.rgba_vae.decode(
-            merged_latents, tiled=False
+            merged_latents, tiled=True, tile_size=(34, 34), tile_stride=(18, 16)
         )
 
         # Add batch dimension for loss calculation [1, C, T, H, W]
@@ -297,6 +302,10 @@ if __name__ == "__main__":
 
                 # Log
                 epoch_losses.append(loss_dict)
+
+                # Clear CUDA cache to prevent OOM
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
         # Print epoch stats
         avg_loss = sum([d["total"] for d in epoch_losses]) / len(epoch_losses)
