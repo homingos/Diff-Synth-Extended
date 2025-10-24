@@ -285,10 +285,14 @@ if __name__ == "__main__":
     print(f"Starting Feature Merge Block training...")
     print(f"Output path: {args.output_path}")
 
+    global_step = 0
+    best_loss = float("inf")
+
     for epoch_id in range(args.num_epochs):
         epoch_losses = []
 
-        for data in tqdm(dataloader, desc=f"Epoch {epoch_id}"):
+        pbar = tqdm(dataloader, desc=f"Epoch {epoch_id}")
+        for step, data in enumerate(pbar):
             with accelerator.accumulate(model):
                 optimizer.zero_grad()
 
@@ -302,14 +306,73 @@ if __name__ == "__main__":
 
                 # Log
                 epoch_losses.append(loss_dict)
+                global_step += 1
+
+                # Step-wise logging
+                if global_step % 10 == 0:
+                    # Calculate moving average of last 10 steps
+                    recent_losses = epoch_losses[-10:]
+                    avg_total = sum([d["total"] for d in recent_losses]) / len(
+                        recent_losses
+                    )
+                    avg_alpha = sum([d["alpha_loss"] for d in recent_losses]) / len(
+                        recent_losses
+                    )
+                    avg_rgb_soft = sum(
+                        [d["rgb_soft_loss"] for d in recent_losses]
+                    ) / len(recent_losses)
+                    avg_rgb_hard = sum(
+                        [d["rgb_hard_loss"] for d in recent_losses]
+                    ) / len(recent_losses)
+
+                    # Update progress bar
+                    pbar.set_postfix(
+                        {
+                            "loss": f"{avg_total:.4f}",
+                            "α": f"{avg_alpha:.3f}",
+                            "rgb_s": f"{avg_rgb_soft:.3f}",
+                            "rgb_h": f"{avg_rgb_hard:.3f}",
+                            "lr": f"{scheduler.get_last_lr()[0]:.2e}",
+                        }
+                    )
+
+                    # Print detailed metrics every 50 steps
+                    if global_step % 50 == 0:
+                        accelerator.print(
+                            f"\n[Step {global_step}] "
+                            f"Loss: {avg_total:.6f} | "
+                            f"Alpha: {avg_alpha:.6f} | "
+                            f"RGB-Soft: {avg_rgb_soft:.6f} | "
+                            f"RGB-Hard: {avg_rgb_hard:.6f} | "
+                            f"LR: {scheduler.get_last_lr()[0]:.2e}"
+                        )
 
                 # Clear CUDA cache to prevent OOM
                 if torch.cuda.is_available():
                     torch.cuda.empty_cache()
 
-        # Print epoch stats
-        avg_loss = sum([d["total"] for d in epoch_losses]) / len(epoch_losses)
-        print(f"Epoch {epoch_id} - Average Loss: {avg_loss:.6f}")
+        # Print epoch summary
+        avg_total = sum([d["total"] for d in epoch_losses]) / len(epoch_losses)
+        avg_alpha = sum([d["alpha_loss"] for d in epoch_losses]) / len(epoch_losses)
+        avg_rgb_soft = sum([d["rgb_soft_loss"] for d in epoch_losses]) / len(
+            epoch_losses
+        )
+        avg_rgb_hard = sum([d["rgb_hard_loss"] for d in epoch_losses]) / len(
+            epoch_losses
+        )
+
+        accelerator.print(f"\n{'='*80}")
+        accelerator.print(f"Epoch {epoch_id} Summary:")
+        accelerator.print(f"  Total Loss:     {avg_total:.6f}")
+        accelerator.print(f"  Alpha Loss:     {avg_alpha:.6f}")
+        accelerator.print(f"  RGB-Soft Loss:  {avg_rgb_soft:.6f}")
+        accelerator.print(f"  RGB-Hard Loss:  {avg_rgb_hard:.6f}")
+        accelerator.print(f"{'='*80}\n")
+
+        # Track best model
+        if avg_total < best_loss:
+            best_loss = avg_total
+            accelerator.print(f"✨ New best loss: {best_loss:.6f}")
 
         # Save checkpoint
         accelerator.wait_for_everyone()
@@ -318,11 +381,42 @@ if __name__ == "__main__":
 
             # Save only feature merge block weights
             feature_merge_state = model.rgba_vae.feature_merge.state_dict()
+
+            # Save epoch checkpoint
             save_path = os.path.join(
                 args.output_path, f"feature_merge_epoch_{epoch_id}.safetensors"
             )
-
             accelerator.save(feature_merge_state, save_path, safe_serialization=True)
-            print(f"✅ Saved: {save_path}")
+            print(f"✅ Saved epoch checkpoint: {save_path}")
+
+            # Save best model
+            if avg_total == best_loss:
+                best_path = os.path.join(
+                    args.output_path, "feature_merge_best.safetensors"
+                )
+                accelerator.save(
+                    feature_merge_state, best_path, safe_serialization=True
+                )
+                print(f"🌟 Saved best model: {best_path}")
+
+            # Save training metrics
+            metrics_path = os.path.join(
+                args.output_path, f"metrics_epoch_{epoch_id}.json"
+            )
+            import json
+
+            metrics = {
+                "epoch": epoch_id,
+                "global_step": global_step,
+                "total_loss": float(avg_total),
+                "alpha_loss": float(avg_alpha),
+                "rgb_soft_loss": float(avg_rgb_soft),
+                "rgb_hard_loss": float(avg_rgb_hard),
+                "best_loss": float(best_loss),
+                "learning_rate": float(scheduler.get_last_lr()[0]),
+            }
+            with open(metrics_path, "w") as f:
+                json.dump(metrics, f, indent=2)
+            print(f"📊 Saved metrics: {metrics_path}")
 
     print("✅ Feature Merge Block training completed!")
