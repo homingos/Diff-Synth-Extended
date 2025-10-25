@@ -245,6 +245,3 @@ diffsynth/utils/__init__.py
 diffsynth/vram_management/__init__.py
 diffsynth/vram_management/gradient_checkpointing.py
 diffsynth/vram_management/layers.py
-
-git config --global user.name "Debaditya Sen"
-git config --global user.email "pabs.sen1@gmail.com"
