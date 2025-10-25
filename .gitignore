@@ -4,3 +4,7 @@ weights
 data
 dataset_30FPS
 **/.DS_Store
+backup_latents
+cached_latents
+WanAlpha-VAE
+dataset_30FPS.zip

@@ -236,6 +236,7 @@ diffsynth/tokenizer_configs/stable_diffusion_xl/tokenizer_2/special_tokens_map.j
 diffsynth/tokenizer_configs/stable_diffusion_xl/tokenizer_2/tokenizer_config.json
 diffsynth/tokenizer_configs/stable_diffusion_xl/tokenizer_2/vocab.json
 diffsynth/trainers/__init__.py
+diffsynth/trainers/cached_latent_dataset.py
 diffsynth/trainers/rgba_losses.py
 diffsynth/trainers/text_to_image.py
 diffsynth/trainers/unified_dataset.py
@@ -244,3 +245,6 @@ diffsynth/utils/__init__.py
 diffsynth/vram_management/__init__.py
 diffsynth/vram_management/gradient_checkpointing.py
 diffsynth/vram_management/layers.py
+
+git config --global user.name "Debaditya Sen"
+git config --global user.email "pabs.sen1@gmail.com"

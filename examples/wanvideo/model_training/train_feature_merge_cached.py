@@ -99,21 +99,33 @@ class CachedFeatureMergeTrainer(nn.Module):
         hard_colors = batch_data["hard_colors"]
         soft_colors = batch_data["soft_colors"]
 
-        # Apply feature merge block
-        merged_latents = self.feature_merge(rgb_latents, alpha_latents)
+        # Apply feature merge block with gradient checkpointing if available
+        if self.training and torch.cuda.is_available():
+            # Use gradient checkpointing to save memory
+            import torch.utils.checkpoint as checkpoint
+            merged_latents = checkpoint.checkpoint(
+                self.feature_merge, rgb_latents, alpha_latents, use_reentrant=False
+            )
+        else:
+            merged_latents = self.feature_merge(rgb_latents, alpha_latents)
 
         # Decode with dual decoders (convert to list format expected by VAE)
         merged_latents_list = [
             merged_latents[i] for i in range(merged_latents.shape[0])
         ]
 
-        with torch.no_grad():  # Decoders are frozen
-            pred_rgb_list, pred_alpha_list = self.rgba_vae.decode(
-                merged_latents_list,
-                tiled=True,  # Use tiling for memory efficiency
-                tile_size=(34, 34),
-                tile_stride=(18, 16),
-            )
+        # Decode with frozen decoders (but allow gradients to flow through)
+        # Clear cache before decoding to maximize available memory
+        torch.cuda.empty_cache()
+        
+        # Decode without tiling, like other diffsynth pipelines
+        pred_rgb_list, pred_alpha_list = self.rgba_vae.decode(
+            merged_latents_list,
+            tiled=False  # No tiling, standard decode
+        )
+        
+        # Clear cache after decoding to free up memory
+        torch.cuda.empty_cache()
 
         # Stack predictions back to batch tensor
         pred_rgb = torch.stack(pred_rgb_list)
@@ -158,8 +170,8 @@ class CachedFeatureMergeTrainer(nn.Module):
         return total_loss, loss_dict
 
 
-def train_epoch(model, dataloader, optimizer, accelerator, epoch, use_wandb=False):
-    """Train for one epoch"""
+def train_epoch(model, dataloader, optimizer, accelerator, epoch, gradient_accumulation_steps=1, use_wandb=False):
+    """Train for one epoch with gradient accumulation"""
     model.train()
     total_loss = 0
     total_samples = 0
@@ -171,22 +183,31 @@ def train_epoch(model, dataloader, optimizer, accelerator, epoch, use_wandb=Fals
     for batch_idx, batch_data in enumerate(progress_bar):
         # Forward pass
         loss, loss_dict = model(batch_data)
+        
+        # Scale loss by gradient accumulation steps
+        loss = loss / gradient_accumulation_steps
 
         # Backward pass
         accelerator.backward(loss)
 
-        # Gradient clipping
-        if accelerator.sync_gradients:
-            accelerator.clip_grad_norm_(model.parameters(), 1.0)
+        # Only step optimizer every N batches
+        if (batch_idx + 1) % gradient_accumulation_steps == 0 or (batch_idx + 1) == len(dataloader):
+            # Gradient clipping
+            if accelerator.sync_gradients:
+                accelerator.clip_grad_norm_(model.parameters(), 1.0)
 
-        optimizer.step()
-        optimizer.zero_grad()
+            optimizer.step()
+            optimizer.zero_grad()
 
-        # Update metrics
+        # Update metrics (use unscaled loss for logging)
         batch_size = batch_data["rgb_latents"].shape[0]
-        total_loss += loss.item() * batch_size
+        total_loss += loss.item() * batch_size * gradient_accumulation_steps
         total_samples += batch_size
 
+        # Clear GPU cache periodically to prevent memory fragmentation
+        if batch_idx % 10 == 0:
+            torch.cuda.empty_cache()
+            
         # Update progress bar
         if batch_idx % 10 == 0:
             avg_loss = total_loss / total_samples
@@ -249,6 +270,12 @@ def main():
     )
     parser.add_argument(
         "--num_workers", type=int, default=4, help="Number of dataloader workers"
+    )
+    parser.add_argument(
+        "--gradient_accumulation_steps", 
+        type=int, 
+        default=1, 
+        help="Number of gradient accumulation steps"
     )
 
     # Output arguments
@@ -340,7 +367,7 @@ def main():
     )
 
     # Prepare for distributed training
-    model, optimizer = accelerator.prepare(model, optimizer)
+    model, optimizer, dataloader = accelerator.prepare(model, optimizer, dataloader)
 
     # Training loop
     print(f"Starting Feature Merge Block training with cached latents...")
@@ -349,7 +376,9 @@ def main():
     for epoch in range(args.num_epochs):
         # Train for one epoch
         avg_loss = train_epoch(
-            model, dataloader, optimizer, accelerator, epoch, args.use_wandb
+            model, dataloader, optimizer, accelerator, epoch, 
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            use_wandb=args.use_wandb
         )
 
         if accelerator.is_main_process:

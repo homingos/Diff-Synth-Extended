@@ -58,6 +58,13 @@ class RGBAReconstructionLoss(nn.Module):
         pred_norm = (pred + 1.0) / 2.0
         target_norm = (target + 1.0) / 2.0
 
+        # Handle video data (5D tensors)
+        if pred_norm.dim() == 5:
+            # Reshape from [B, C, T, H, W] to [B*T, C, H, W]
+            B, C, T, H, W = pred_norm.shape
+            pred_norm = pred_norm.permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)
+            target_norm = target_norm.permute(0, 2, 1, 3, 4).reshape(B * T, C, H, W)
+
         # Extract VGG features
         pred_features = self.vgg(pred_norm)
         target_features = self.vgg(target_norm)
@@ -85,7 +92,9 @@ class RGBAReconstructionLoss(nn.Module):
         # Apply Sobel to each channel and average
         def sobel_gradient(img):
             # img shape: [B, C, H, W] or [B, C, T, H, W]
-            if img.dim() == 5:
+            is_video = img.dim() == 5
+            
+            if is_video:
                 # For video, process each frame
                 B, C, T, H, W = img.shape
                 img = img.reshape(B * C * T, 1, H, W)
@@ -97,7 +106,7 @@ class RGBAReconstructionLoss(nn.Module):
             grad_y = F.conv2d(img, sobel_y, padding=1)
             gradient = torch.sqrt(grad_x**2 + grad_y**2)
 
-            if img.dim() == 5:
+            if is_video:
                 gradient = gradient.reshape(B, C, T, H, W)
             else:
                 gradient = gradient.reshape(B, C, H, W)
